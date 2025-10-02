@@ -39,7 +39,7 @@ from accelerate.utils import DistributedType, set_seed
 
 from training.data import Text2ImageDataset
 from training.imagenet_dataset import ImageNetDataset
-from parquet import RefinedWebDataset
+# from parquet import RefinedWebDataset
 
 from models import Showo, MAGVITv2, get_mask_chedule
 from training.prompting_utils import UniversalPrompting, create_attention_mask_predict_next, \
@@ -401,15 +401,44 @@ def main():
     else:
         raise NotImplementedError(f"Unsupported dataset type {config.dataset.und_type}")
 
-    # LLM pure text dataset: RefinedWeb
-    dataset_lm = RefinedWebDataset(data_path=dataset_config.train_lm_shards_path_or_url,
-                                   rank=accelerator.process_index,
-                                   world_size=accelerator.num_processes,
-                                   num_workers=dataset_config.num_workers)
+    assert(dataset_config.train_lm_shards_path_or_url.startswith("hf://"))
 
-    train_dataloader_lm = torch.utils.data.DataLoader(dataset_lm, batch_size=config.training.batch_size_lm,
-                                                      sampler=None, collate_fn=dataset_lm.collate_fn,
-                                                      num_workers=dataset_config.num_workers)
+    # Extract dataset name from hf://dataset/subset/split format
+    from datasets import load_dataset
+    import collections
+
+    parts = dataset_config.train_lm_shards_path_or_url.replace("hf://", "").split("/")
+    dataset_name = "/".join(parts[:2])  # e.g., "allenai/c4"
+    subset = parts[2] if len(parts) > 2 else None  # e.g., "en"
+    split = parts[3] if len(parts) > 3 else "train"
+
+    logger.info(f"Loading HuggingFace dataset: {dataset_name}, subset: {subset}, split: {split}")
+
+    dataset_lm_hf = load_dataset(dataset_name, subset, split=split, streaming=True)
+
+    class HFTextDataset(torch.utils.data.IterableDataset):
+        def __init__(self, hf_dataset, max_length=8000):
+            self.dataset = hf_dataset
+            self.max_length = max_length
+
+        def __iter__(self):
+            for example in self.dataset:
+                text = example['text'][:self.max_length]
+                yield {'input_ids': text}
+
+        def collate_fn(self, batch):
+            batched = collections.defaultdict(list)
+            for data in batch:
+                for k, v in data.items():
+                    batched[k].append(v)
+            return batched
+
+    dataset_lm = HFTextDataset(dataset_lm_hf)
+    train_dataloader_lm = torch.utils.data.DataLoader(
+        dataset_lm,
+        batch_size=config.training.batch_size_lm,
+        collate_fn=dataset_lm.collate_fn
+    )
 
     # Combine these dataloaders into a single iterable model
     iterables = {
@@ -419,6 +448,73 @@ def main():
     }
 
     combined_dataloader = CombinedLoader(iterables, mode=config.dataset.combined_loader_mode)
+
+    ##################################
+    #   DEBUG: Print First Batch    #
+    ##################################
+    logger.info("=" * 80)
+    logger.info("LOADING FIRST BATCH FROM COMBINED DATALOADER")
+    logger.info("=" * 80)
+
+    try:
+        first_batch, batch_idx, dataloader_idx = next(iter(combined_dataloader))
+
+        logger.info(f"\nBatch structure:")
+        logger.info(f"  Batch index: {batch_idx}")
+        logger.info(f"  Dataloader index: {dataloader_idx}")
+
+        # Helper function to save image
+        def save_image(tensor, filename):
+            # Denormalize from [-1, 1] to [0, 1]
+            image = torch.clamp((tensor + 1.0) / 2.0, min=0.0, max=1.0)
+            # Convert to PIL
+            image = image.permute(1, 2, 0).cpu().numpy()
+            image = (image * 255).astype(np.uint8)
+            pil_image = Image.fromarray(image)
+            pil_image.save(filename)
+            logger.info(f"  Saved image to: {filename}")
+
+        # T2I flow
+        if "t2i_flow" in first_batch:
+            logger.info(f"\n[T2I Flow]")
+            logger.info(f"  Images shape: {first_batch['t2i_flow']['images'].shape}")
+            logger.info(f"  Captions (first 3):")
+            for i, caption in enumerate(first_batch['t2i_flow']['input_ids'][:3]):
+                logger.info(f"    {i}: {caption[:150]}...")
+
+            # Save first image
+            save_image(first_batch['t2i_flow']['images'][0], "debug_t2i_sample.png")
+
+        # LM flow
+        if "lm_flow" in first_batch:
+            logger.info(f"\n[LM Flow]")
+            logger.info(f"  Number of texts: {len(first_batch['lm_flow']['input_ids'])}")
+            logger.info(f"  Texts (first 2):")
+            for i, text in enumerate(first_batch['lm_flow']['input_ids'][:2]):
+                logger.info(f"    {i}: {text[:150]}...")
+
+        # MMU flow
+        if "mmu_flow" in first_batch:
+            logger.info(f"\n[MMU Flow]")
+            logger.info(f"  Images shape: {first_batch['mmu_flow']['images'].shape}")
+            logger.info(f"  Captions (first 3):")
+            for i, caption in enumerate(first_batch['mmu_flow']['input_ids'][:3]):
+                logger.info(f"    {i}: {caption[:150]}...")
+
+            # Save first image
+            save_image(first_batch['mmu_flow']['images'][0], "debug_mmu_sample.png")
+
+        logger.info("\n" + "=" * 80)
+        logger.info("FIRST BATCH LOADED SUCCESSFULLY - EXITING")
+        logger.info("=" * 80)
+
+        return  # Exit early - no training
+
+    except Exception as e:
+        logger.error(f"Error loading first batch: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     ##################################
     #         MODEL RESUME          #
