@@ -408,20 +408,41 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch, batch_idx, dataloader_idx in combined_dataloader:
-            # Debug logging - log first sample of each type
-            logger.info("=" * 80)
-            logger.info("T2I Flow - Text prompt (first 200 chars):")
-            logger.info(f"{batch['t2i_flow']['input_ids'][0][:200]}")
-            logger.info(f"T2I Flow - Image shape: {batch['t2i_flow']['images'][0].shape}")
+            # Debug logging - save images and text info for first iteration on main process
+            if global_step == 0 and accelerator.is_main_process:
+                # Save debug info to file
+                debug_file_path = f"{config.experiment.output_dir}/debug_batch_info.txt"
+                with open(debug_file_path, 'w') as f:
+                    f.write("=" * 80 + "\n")
+                    f.write("T2I Flow - Text prompt (first 200 chars):\n")
+                    f.write(f"{batch['t2i_flow']['input_ids'][0][:200]}\n")
+                    f.write(f"T2I Flow - Image shape: {batch['t2i_flow']['images'][0].shape}\n")
 
-            logger.info("\nLM Flow - Text (first 200 chars):")
-            logger.info(f"{batch['lm_flow']['input_ids'][0][:200]}")
+                    f.write("\nLM Flow - Text (first 200 chars):\n")
+                    f.write(f"{batch['lm_flow']['input_ids'][0][:200]}\n")
 
-            logger.info("\nMMU Flow - Text prompt (first 200 chars):")
-            logger.info(f"{batch['mmu_flow']['input_ids'][0][:200]}")
-            logger.info(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}")
-            logger.info("=" * 80)
-            return
+                    f.write("\nMMU Flow - Text prompt (first 200 chars):\n")
+                    f.write(f"{batch['mmu_flow']['input_ids'][0][:200]}\n")
+                    f.write(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}\n")
+                    f.write("=" * 80 + "\n")
+
+                # Save T2I flow image
+                t2i_image = batch['t2i_flow']['images'][0]
+                t2i_image = torch.clamp((t2i_image + 1.0) / 2.0, min=0.0, max=1.0)
+                t2i_image *= 255.0
+                t2i_image = t2i_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                t2i_pil = Image.fromarray(t2i_image)
+                t2i_pil.save(f"{config.experiment.output_dir}/debug_t2i_flow.png")
+
+                # Save MMU flow image
+                mmu_image = batch['mmu_flow']['images'][0]
+                mmu_image = torch.clamp((mmu_image + 1.0) / 2.0, min=0.0, max=1.0)
+                mmu_image *= 255.0
+                mmu_image = mmu_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                mmu_pil = Image.fromarray(mmu_image)
+                mmu_pil.save(f"{config.experiment.output_dir}/debug_mmu_flow.png")
+
+                logger.info(f"Saved debug info and images to {config.experiment.output_dir}")
 
             # for loss calculation
             batch_size_t2i = batch["t2i_flow"]["images"].shape[0]
@@ -527,7 +548,6 @@ def main():
                     batch_size_mmu=batch_size_mmu,
                     max_seq_length=config.dataset.preprocessing.max_seq_length,
                 )
-                return
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss_t2i = accelerator.gather(loss_t2i.repeat(config.training.batch_size_t2i)).mean()

@@ -20,10 +20,12 @@ from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 from .sampling import cosine_schedule, mask_by_random_topk
 from .phi import PhiForCausalLM
 from .base import Transformer
+from pathlib import Path
+
+
 
 class Showo(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
-    _saved_inputs = False
 
     @register_to_config
     def __init__(
@@ -72,13 +74,8 @@ class Showo(ModelMixin, ConfigMixin):
 
         assert input_embeddings is None
 
-        # Save input_ids and attention_mask before model call (only once and only on main process)
-        if not Showo._saved_inputs:
-            is_main_process = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
-            if is_main_process:
-                torch.save(input_ids, 'input_ids.pt')
-                torch.save(attention_mask, 'attention_mask.pt')
-                Showo._saved_inputs = True
+        # torch.save(input_ids, Path(__file__).parent / 'input_ids_3.pt')
+        # torch.save(attention_mask, Path(__file__).parent / 'attention_mask_3.pt')
 
         logits = self.model(input_ids=input_ids, attention_mask=attention_mask)['logits']
 
