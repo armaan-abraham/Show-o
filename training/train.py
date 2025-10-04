@@ -288,7 +288,7 @@ def main():
 
     train_dataloader_t2i = DataLoader(dataset_imagenet, batch_size=config.training.batch_size_t2i,
                                     sampler=sampler, collate_fn=dataset_imagenet.collate_fn,
-                                    shuffle=shuffle, num_workers=dataset_config.num_workers)
+                                    shuffle=shuffle, num_workers=os.cpu_count())
     num_update_steps_per_epoch = math.ceil(len(dataset_imagenet) / total_batch_size_t2i)
     num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
 
@@ -302,7 +302,7 @@ def main():
         num_train_examples=config.experiment.max_train_examples_mmu,
         per_gpu_batch_size=config.training.batch_size_mmu,
         global_batch_size=total_batch_size_mmu_without_accum,
-        num_workers=dataset_config.num_workers,
+        num_workers=os.cpu_count(),
         resolution=preproc_config.resolution,
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
@@ -323,7 +323,8 @@ def main():
     train_dataloader_lm = torch.utils.data.DataLoader(
         dataset_lm,
         batch_size=config.training.batch_size_lm,
-        collate_fn=dataset_lm.collate_fn
+        collate_fn=dataset_lm.collate_fn,
+        num_workers=os.cpu_count()
     )
 
     # Combine these dataloaders into a single iterable model
