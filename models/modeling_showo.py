@@ -19,6 +19,7 @@ from transformers import AutoConfig
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 from .sampling import cosine_schedule, mask_by_random_topk
 from .phi import PhiForCausalLM
+from .base import Transformer
 
 class Showo(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
@@ -36,14 +37,10 @@ class Showo(ModelMixin, ConfigMixin):
             **kwargs,
     ):
         super().__init__()
+        assert w_clip_vit is False, "clip_vit must be False"
         self.vocab_size = vocab_size
         self.register_to_config(mask_token_id=vocab_size - 1)
-        if load_from_showo:
-            config = AutoConfig.from_pretrained(llm_model_path)
-            self.showo = PhiForCausalLM(config)
-        else:
-            self.showo = PhiForCausalLM.from_pretrained(llm_model_path, attn_implementation='sdpa')
-        self.showo.resize_token_embeddings(self.vocab_size)
+        self.model = Transformer(vocab_size)
         self.output_size = self.vocab_size
 
         if self.w_clip_vit:
@@ -72,10 +69,13 @@ class Showo(ModelMixin, ConfigMixin):
             **kwargs,
     ):
 
-        if input_embeddings is None:
-            logits = self.showo(input_ids=input_ids, attention_mask=attention_mask)['logits']
-        else:
-            logits = self.showo(inputs_embeds=input_embeddings, attention_mask=attention_mask)['logits']
+        assert input_embeddings is None
+
+        # Save input_ids and attention_mask before model call
+        torch.save(input_ids, 'input_ids.pt')
+        torch.save(attention_mask, 'attention_mask.pt')
+
+        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)['logits']
 
         if labels is not None:
             # 1. Mask token prediction (discrete diffusion) for image generation
@@ -228,8 +228,9 @@ class Showo(ModelMixin, ConfigMixin):
             idx_next = torch.multinomial(probs, num_samples=1)
             result.append(idx_next[0][0])
             # append sampled index to the running sequence and continue
+            assert self.config.w_clip_vit is False, "clip_vit must be False"
             if self.config.w_clip_vit:
-                idx_next_embeddings = self.showo.model.embed_tokens(idx_next)
+                # idx_next_embeddings = self.model.model.embed_tokens(idx_next)
                 input_embeddings = torch.cat([input_embeddings, idx_next_embeddings], dim=1)
             else:
                 idx = torch.cat((idx, idx_next), dim=1)

@@ -449,72 +449,6 @@ def main():
 
     combined_dataloader = CombinedLoader(iterables, mode=config.dataset.combined_loader_mode)
 
-    ##################################
-    #   DEBUG: Print First Batch    #
-    ##################################
-    logger.info("=" * 80)
-    logger.info("LOADING FIRST BATCH FROM COMBINED DATALOADER")
-    logger.info("=" * 80)
-
-    try:
-        first_batch, batch_idx, dataloader_idx = next(iter(combined_dataloader))
-
-        logger.info(f"\nBatch structure:")
-        logger.info(f"  Batch index: {batch_idx}")
-        logger.info(f"  Dataloader index: {dataloader_idx}")
-
-        # Helper function to save image
-        def save_image(tensor, filename):
-            # Denormalize from [-1, 1] to [0, 1]
-            image = torch.clamp((tensor + 1.0) / 2.0, min=0.0, max=1.0)
-            # Convert to PIL
-            image = image.permute(1, 2, 0).cpu().numpy()
-            image = (image * 255).astype(np.uint8)
-            pil_image = Image.fromarray(image)
-            pil_image.save(filename)
-            logger.info(f"  Saved image to: {filename}")
-
-        # T2I flow
-        if "t2i_flow" in first_batch:
-            logger.info(f"\n[T2I Flow]")
-            logger.info(f"  Images shape: {first_batch['t2i_flow']['images'].shape}")
-            logger.info(f"  Captions (first 3):")
-            for i, caption in enumerate(first_batch['t2i_flow']['input_ids'][:3]):
-                logger.info(f"    {i}: {caption[:150]}...")
-
-            # Save first image
-            save_image(first_batch['t2i_flow']['images'][0], "debug_t2i_sample.png")
-
-        # LM flow
-        if "lm_flow" in first_batch:
-            logger.info(f"\n[LM Flow]")
-            logger.info(f"  Number of texts: {len(first_batch['lm_flow']['input_ids'])}")
-            logger.info(f"  Texts (first 2):")
-            for i, text in enumerate(first_batch['lm_flow']['input_ids'][:2]):
-                logger.info(f"    {i}: {text[:150]}...")
-
-        # MMU flow
-        if "mmu_flow" in first_batch:
-            logger.info(f"\n[MMU Flow]")
-            logger.info(f"  Images shape: {first_batch['mmu_flow']['images'].shape}")
-            logger.info(f"  Captions (first 3):")
-            for i, caption in enumerate(first_batch['mmu_flow']['input_ids'][:3]):
-                logger.info(f"    {i}: {caption[:150]}...")
-
-            # Save first image
-            save_image(first_batch['mmu_flow']['images'][0], "debug_mmu_sample.png")
-
-        logger.info("\n" + "=" * 80)
-        logger.info("FIRST BATCH LOADED SUCCESSFULLY - EXITING")
-        logger.info("=" * 80)
-
-        return  # Exit early - no training
-
-    except Exception as e:
-        logger.error(f"Error loading first batch: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
 
     ##################################
     #         MODEL RESUME          #
@@ -546,10 +480,8 @@ def main():
 
     vq_model.to(device=accelerator.device)
 
-    if hasattr(model, 'module'):
-        mask_dtype = model.module.showo.model.embed_tokens.weight.dtype
-    else:
-        mask_dtype = model.showo.model.embed_tokens.weight.dtype
+    # TODO: move mask
+    mask_dtype = torch.bfloat16
 
     ##################################
     #             Training          #
@@ -876,10 +808,8 @@ def generate_images(
     with open(config.dataset.params.validation_prompts_file, "r") as f:
         validation_prompts = f.read().splitlines()
 
-    if hasattr(model, 'module'):
-        mask_dtype = model.module.showo.model.embed_tokens.weight.dtype
-    else:
-        mask_dtype = model.showo.model.embed_tokens.weight.dtype
+    # TODO: remove mask generation to model
+    mask_dtype = torch.bfloat16
 
     mask_token_id = config.model.showo.vocab_size - 1
     image_tokens = torch.ones((len(validation_prompts), config.model.showo.num_vq_tokens), dtype=torch.long,
