@@ -23,6 +23,7 @@ from .base import Transformer
 
 class Showo(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
+    _saved_inputs = False
 
     @register_to_config
     def __init__(
@@ -71,9 +72,13 @@ class Showo(ModelMixin, ConfigMixin):
 
         assert input_embeddings is None
 
-        # Save input_ids and attention_mask before model call
-        torch.save(input_ids, 'input_ids.pt')
-        torch.save(attention_mask, 'attention_mask.pt')
+        # Save input_ids and attention_mask before model call (only once and only on main process)
+        if not Showo._saved_inputs:
+            is_main_process = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+            if is_main_process:
+                torch.save(input_ids, 'input_ids.pt')
+                torch.save(attention_mask, 'attention_mask.pt')
+                Showo._saved_inputs = True
 
         logits = self.model(input_ids=input_ids, attention_mask=attention_mask)['logits']
 
