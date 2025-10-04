@@ -35,22 +35,14 @@ model:
     gradient_checkpointing: True
 
 dataset:
-    gen_type: "t2i"
+    gen_type: "imagenet1k"
     und_type: "captioning"
     combined_loader_mode: "max_size_cycle"
     params:
-        # Using HuggingFace datasets with captions embedded in tars
-        train_t2i_shards_path_or_url: [
-            "https://huggingface.co/datasets/pixparse/cc12m-wds/resolve/main/cc12m-train-{0000..2175}.tar",
-            "https://huggingface.co/datasets/laion/conceptual-captions-12m-webdataset/resolve/main/data/{00000..01099}.tar"
-        ]
-        train_mmu_shards_path_or_url: [
-            "https://huggingface.co/datasets/pixparse/cc12m-wds/resolve/main/cc12m-train-{0000..2175}.tar",
-            "https://huggingface.co/datasets/laion/conceptual-captions-12m-webdataset/resolve/main/data/{00000..01099}.tar"
-        ]
-        train_lm_shards_path_or_url: "hf://allenai/c4/en/train"  # HuggingFace streaming dataset
+        train_t2i_shards_path_or_url: "/iris/u/armaana/datasets/ILSVRC2012_img_train"
+        train_mmu_shards_path_or_url: [ "/iris/u/armaana/datasets/cc12m/cc12m-train-{0000..2175}.tar" ]
+        train_lm_shards_path_or_url: "/iris/u/armaana/datasets/c4/en"
         add_caption_prompt: True
-        # No external caption paths needed - captions are embedded in tar files
         external_caption_path: ""
         external_journeydb_caption_path: ""
         external_laion12m_caption_path: ""

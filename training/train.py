@@ -39,6 +39,7 @@ from accelerate.utils import DistributedType, set_seed
 
 from training.data import Text2ImageDataset
 from training.imagenet_dataset import ImageNetDataset
+from training.c4_dataset import C4Dataset
 # from parquet import RefinedWebDataset
 
 from models import Showo, MAGVITv2, get_mask_chedule
@@ -401,39 +402,10 @@ def main():
     else:
         raise NotImplementedError(f"Unsupported dataset type {config.dataset.und_type}")
 
-    assert(dataset_config.train_lm_shards_path_or_url.startswith("hf://"))
+    # Assert that a path is provided for language modeling data
+    assert dataset_config.train_lm_shards_path_or_url, "train_lm_shards_path_or_url must be provided"
 
-    # Extract dataset name from hf://dataset/subset/split format
-    from datasets import load_dataset
-    import collections
-
-    parts = dataset_config.train_lm_shards_path_or_url.replace("hf://", "").split("/")
-    dataset_name = "/".join(parts[:2])  # e.g., "allenai/c4"
-    subset = parts[2] if len(parts) > 2 else None  # e.g., "en"
-    split = parts[3] if len(parts) > 3 else "train"
-
-    logger.info(f"Loading HuggingFace dataset: {dataset_name}, subset: {subset}, split: {split}")
-
-    dataset_lm_hf = load_dataset(dataset_name, subset, split=split, streaming=True)
-
-    class HFTextDataset(torch.utils.data.IterableDataset):
-        def __init__(self, hf_dataset, max_length=8000):
-            self.dataset = hf_dataset
-            self.max_length = max_length
-
-        def __iter__(self):
-            for example in self.dataset:
-                text = example['text'][:self.max_length]
-                yield {'input_ids': text}
-
-        def collate_fn(self, batch):
-            batched = collections.defaultdict(list)
-            for data in batch:
-                for k, v in data.items():
-                    batched[k].append(v)
-            return batched
-
-    dataset_lm = HFTextDataset(dataset_lm_hf)
+    dataset_lm = C4Dataset(dataset_config.train_lm_shards_path_or_url)
     train_dataloader_lm = torch.utils.data.DataLoader(
         dataset_lm,
         batch_size=config.training.batch_size_lm,
@@ -522,6 +494,21 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch, batch_idx, dataloader_idx in combined_dataloader:
+            # Debug logging - log first sample of each type
+            logger.info("=" * 80)
+            logger.info("T2I Flow - Text prompt (first 200 chars):")
+            logger.info(f"{batch['t2i_flow']['input_ids'][0][:200]}")
+            logger.info(f"T2I Flow - Image shape: {batch['t2i_flow']['images'][0].shape}")
+
+            logger.info("\nLM Flow - Text (first 200 chars):")
+            logger.info(f"{batch['lm_flow']['input_ids'][0][:200]}")
+
+            logger.info("\nMMU Flow - Text prompt (first 200 chars):")
+            logger.info(f"{batch['mmu_flow']['input_ids'][0][:200]}")
+            logger.info(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}")
+            logger.info("=" * 80)
+            return
+
             # for loss calculation
             batch_size_t2i = batch["t2i_flow"]["images"].shape[0]
             batch_size_lm = len(batch["lm_flow"]["input_ids"])
