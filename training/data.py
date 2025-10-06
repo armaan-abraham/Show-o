@@ -131,10 +131,6 @@ class Text2ImageDataset:
             shuffle_buffer_size: int = 1000,
             pin_memory: bool = False,
             persistent_workers: bool = False,
-            external_caption_path: Optional[str] = '',
-            external_journeydb_caption_path: Optional[str] = '',
-            external_laion12m_caption_path: Optional[str] = '',
-            external_cc12m_caption_path: Optional[str] = '',
             is_captioning: bool = False,
             add_caption_prompt: bool = False,
             long_caption: bool = True,
@@ -237,98 +233,6 @@ class Text2ImageDataset:
         # add meta-data to dataloader instance for convenience
         self._train_dataloader.num_batches = num_batches
         self._train_dataloader.num_samples = num_samples
-
-    def load_external_caption(self, sample):
-
-        if 'txt' not in sample.keys():
-            sample['txt'] = ''
-
-        if 'SA1B' in sample['__key__']:
-            captionf = f"{self.external_caption_path}/{sample['__key__'].split('/')[-1]}.txt"
-            if os.path.exists(captionf):
-                with open(captionf, "r") as reader:
-                    captions = reader.readlines()[0].replace('\n', '')
-            else:
-                captions = ""
-
-            # for captioning
-            if self.is_captioning:
-                if self.add_caption_prompt is not None:
-                    prompt = random.sample(self.caption_prompt, 1)[0]
-                    sample['txt'] = prompt + ' ' + captions
-                else:
-                    sample['txt'] = captions
-            # for generation
-            else:
-                # randomly choose short and long captions
-                if random.random() < 0.5:
-                    sample['txt'] = captions.split('.')[0]
-                else:
-                    sample['txt'] = captions
-
-                sample['txt'] = remove_prefix(sample['txt'])
-
-            return sample
-
-        elif 'laion' in sample['__url__']:
-            captionf = f"{self.external_laion12m_caption_path}/{sample['__url__'].split('/')[-1].split('.')[0]}/{sample['__key__']}.caption"
-            if os.path.exists(captionf):
-                with open(captionf, "r") as reader:
-                    captions = reader.readlines()[0].replace('\n', '')
-            else:
-                captions = ""
-
-            # for captioning
-            if self.is_captioning:
-                if self.add_caption_prompt is not None:
-                    prompt = random.sample(self.caption_prompt, 1)[0]
-                    sample['txt'] = prompt + ' ' + captions
-                else:
-                    sample['txt'] = captions
-            # for generation
-            else:
-                # randomly choose short and long captions
-                if random.random() < 0.5:
-                    sample['txt'] = captions.split('.')[0]
-                else:
-                    sample['txt'] = captions
-
-                sample['txt'] = remove_prefix(sample['txt'])
-
-            return sample
-
-        elif 'cc12m' in sample['__url__']:
-            captionf = f"{self.external_cc12m_caption_path}/{sample['__url__'].split('/')[-1].split('.')[0]}/{sample['__key__'].split('/')[-1]}.caption"
-            if os.path.exists(captionf):
-                with open(captionf, "r") as reader:
-                    captions = reader.readlines()[0].replace('\n', '')
-            else:
-                captions = ""
-
-            # for captioning
-            if self.is_captioning:
-                if self.add_caption_prompt is not None:
-                    prompt = random.sample(self.caption_prompt, 1)[0]
-                    sample['txt'] = prompt + ' ' + captions
-                else:
-                    sample['txt'] = captions
-            # for generation
-            else:
-                # randomly choose short and long captions
-                if random.random() < 0.5:
-                    sample['txt'] = captions.split('.')[0]
-                else:
-                    sample['txt'] = captions
-                sample['txt'] = remove_prefix(sample['txt'])
-
-            return sample
-
-        elif self.journeydb_caption is not None and sample['__key__'] in self.journeydb_caption:
-            sample['txt'] = random.sample(self.journeydb_caption[sample['__key__']], 1)[0]
-            return sample
-
-        else:
-            return sample
 
     @property
     def train_dataset(self):

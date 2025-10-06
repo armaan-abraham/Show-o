@@ -307,10 +307,6 @@ def main():
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
         persistent_workers=dataset_config.persistent_workers,
-        external_caption_path=dataset_config.external_caption_path,
-        external_journeydb_caption_path=dataset_config.external_journeydb_caption_path,
-        external_laion12m_caption_path=dataset_config.external_laion12m_caption_path,
-        external_cc12m_caption_path=dataset_config.external_cc12m_caption_path,
         is_captioning=True,
         add_caption_prompt=dataset_config.add_caption_prompt,
     )
@@ -409,6 +405,7 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch, batch_idx, dataloader_idx in combined_dataloader:
+
             # Debug logging - save images and text info for first iteration on main process
             if global_step == 0 and accelerator.is_main_process:
                 # Save debug info to file
