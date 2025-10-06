@@ -394,39 +394,7 @@ def main():
 
             # Debug logging - save images and text info for first iteration on main process
             if global_step == 0 and accelerator.is_main_process:
-                # Save debug info to file
-                debug_file_path = f"{config.experiment.output_dir}/debug_batch_info.txt"
-                with open(debug_file_path, 'w') as f:
-                    f.write("=" * 80 + "\n")
-                    f.write("T2I Flow - Text prompt (first 200 chars):\n")
-                    f.write(f"{batch['t2i_flow']['input_ids'][0][:200]}\n")
-                    f.write(f"T2I Flow - Image shape: {batch['t2i_flow']['images'][0].shape}\n")
-
-                    f.write("\nLM Flow - Text (first 200 chars):\n")
-                    f.write(f"{batch['lm_flow']['input_ids'][0][:200]}\n")
-
-                    f.write("\nMMU Flow - Text prompt (first 200 chars):\n")
-                    f.write(f"{batch['mmu_flow']['input_ids'][0][:200]}\n")
-                    f.write(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}\n")
-                    f.write("=" * 80 + "\n")
-
-                # Save T2I flow image
-                t2i_image = batch['t2i_flow']['images'][0]
-                t2i_image = torch.clamp((t2i_image + 1.0) / 2.0, min=0.0, max=1.0)
-                t2i_image *= 255.0
-                t2i_image = t2i_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-                t2i_pil = Image.fromarray(t2i_image)
-                t2i_pil.save(f"{config.experiment.output_dir}/debug_t2i_flow.png")
-
-                # Save MMU flow image
-                mmu_image = batch['mmu_flow']['images'][0]
-                mmu_image = torch.clamp((mmu_image + 1.0) / 2.0, min=0.0, max=1.0)
-                mmu_image *= 255.0
-                mmu_image = mmu_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-                mmu_pil = Image.fromarray(mmu_image)
-                mmu_pil.save(f"{config.experiment.output_dir}/debug_mmu_flow.png")
-
-                logger.info(f"Saved debug info and images to {config.experiment.output_dir}")
+                save_debug_batch_info(batch, config, config.experiment.output_dir)
 
             # for loss calculation
             batch_size_t2i = batch["t2i_flow"]["images"].shape[0]
@@ -472,42 +440,12 @@ def main():
             # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
             # Build formatted sequences for captioning/multimodal understanding
             # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            if "llava" in config.dataset.und_type:
-                pixel_values_mmu, input_ids_mmu, labels_mmu = (batch["mmu_flow"]["images"],
-                                                               batch["mmu_flow"]["input_ids"],
-                                                               batch["mmu_flow"]["labels"])
-                pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
-                input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
-                image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
-                image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
-
-                input_ids_mmu = torch.cat([
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.sptids_dict['<|mmu|>']).to(
-                        accelerator.device),
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.sptids_dict['<|soi|>']).to(
-                        accelerator.device),
-                    image_tokens_mmu,
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.sptids_dict['<|eoi|>']).to(
-                        accelerator.device),
-                    input_ids_mmu,
-                ], dim=1).long()
-
-                labels_mmu = torch.cat([
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.ignore_id).to(accelerator.device),
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.ignore_id).to(accelerator.device),
-                    torch.ones_like(image_tokens_mmu) * uni_prompting.ignore_id,
-                    (torch.ones(input_ids_mmu.shape[0], 1) * uni_prompting.ignore_id).to(accelerator.device),
-                    labels_mmu.to(accelerator.device)
-                ], dim=1).long()
-
-            else:
-
-                pixel_values_mmu, texts_mmu = batch["mmu_flow"]["images"], batch["mmu_flow"]["input_ids"]
-                pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
-                image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
-                image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
-                input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
-                input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
+            pixel_values_mmu, texts_mmu = batch["mmu_flow"]["images"], batch["mmu_flow"]["input_ids"]
+            pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
+            image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
+            image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
+            input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
+            input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
 
             attention_mask_mmu = create_attention_mask_for_mmu(input_ids_mmu.to(input_ids.device),
                                                                eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
@@ -515,10 +453,6 @@ def main():
             attention_mask = torch.cat([attention_mask, attention_mask_mmu], dim=0)
             input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
             labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
-
-            if global_step == 0 and epoch == 0:
-                logger.info("Input ids: {}".format(input_ids))
-                logger.info("Labels: {}".format(labels))
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu = model(
@@ -645,6 +579,43 @@ def main():
         model.save_pretrained(config.experiment.output_dir, safe_serialization=False)
 
     accelerator.end_training()
+
+
+def save_debug_batch_info(batch, config, output_dir):
+    """Save debug information for the first batch including text and images."""
+    # Save debug info to file
+    debug_file_path = f"{output_dir}/debug_batch_info.txt"
+    with open(debug_file_path, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("T2I Flow - Text prompt (first 200 chars):\n")
+        f.write(f"{batch['t2i_flow']['input_ids'][0][:200]}\n")
+        f.write(f"T2I Flow - Image shape: {batch['t2i_flow']['images'][0].shape}\n")
+
+        f.write("\nLM Flow - Text (first 200 chars):\n")
+        f.write(f"{batch['lm_flow']['input_ids'][0][:200]}\n")
+
+        f.write("\nMMU Flow - Text prompt (first 200 chars):\n")
+        f.write(f"{batch['mmu_flow']['input_ids'][0][:200]}\n")
+        f.write(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}\n")
+        f.write("=" * 80 + "\n")
+
+    # Save T2I flow image
+    t2i_image = batch['t2i_flow']['images'][0]
+    t2i_image = torch.clamp((t2i_image + 1.0) / 2.0, min=0.0, max=1.0)
+    t2i_image *= 255.0
+    t2i_image = t2i_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+    t2i_pil = Image.fromarray(t2i_image)
+    t2i_pil.save(f"{output_dir}/debug_t2i_flow.png")
+
+    # Save MMU flow image
+    mmu_image = batch['mmu_flow']['images'][0]
+    mmu_image = torch.clamp((mmu_image + 1.0) / 2.0, min=0.0, max=1.0)
+    mmu_image *= 255.0
+    mmu_image = mmu_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+    mmu_pil = Image.fromarray(mmu_image)
+    mmu_pil.save(f"{output_dir}/debug_mmu_flow.png")
+
+    logger.info(f"Saved debug info and images to {output_dir}")
 
 
 @torch.no_grad()

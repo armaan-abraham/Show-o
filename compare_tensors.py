@@ -19,7 +19,7 @@ def compare_tensors(file1, file2, name):
         print(f"{name}: {unequal_count} / {total_elements} elements are unequal")
 
 # Compare input_ids files
-compare_tensors("input_ids1.pt", "input_ids.pt", "input_ids")
+compare_tensors("input_ids1.pt", "models/input_ids.pt", "input_ids")
 
 # Compare attention_mask files
-compare_tensors("attention_mask1.pt", "attention_mask.pt", "attention_mask")
+compare_tensors("attention_mask1.pt", "models/attention_mask.pt", "attention_mask")
