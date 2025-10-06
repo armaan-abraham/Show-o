@@ -189,18 +189,7 @@ def main():
     vq_model.requires_grad_(False)
 
     # Initialize Show-o model
-    if config.model.showo.load_from_showo:
-        model = Showo.from_pretrained(config.model.showo.pretrained_model_path).to(accelerator.device)
-        if config.model.showo.vocab_size != model.vocab_size:
-            model.showo.resize_token_embeddings(config.model.showo.vocab_size)
-            model.config.codebook_size = config.model.showo.codebook_size
-            model.config.vocab_size = config.model.showo.vocab_size
-            model.vocab_size = config.model.showo.vocab_size
-            model.output_size = config.model.showo.vocab_size
-            model.config.mask_token_id = config.model.showo.vocab_size - 1
-            model.mask_token_id = config.model.showo.vocab_size - 1
-    else:
-        model = Showo(**config.model.showo).to(accelerator.device)
+    model = Showo(**config.model.showo, accelerator=accelerator).to(accelerator.device)
     mask_id = model.mask_token_id
 
     ##################################
@@ -542,6 +531,7 @@ def main():
                     batch_size_lm=batch_size_lm,
                     batch_size_mmu=batch_size_mmu,
                     max_seq_length=config.dataset.preprocessing.max_seq_length,
+                    global_step=global_step,
                 )
 
                 # Gather the losses across all processes for logging (if we use distributed training).

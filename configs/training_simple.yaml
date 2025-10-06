@@ -22,7 +22,6 @@ model:
         vq_model_name: "showlab/magvitv2"
 
     showo:
-        load_from_showo: False
         pretrained_model_path: "showlab/show-o"
         w_clip_vit: False
         vocab_size: 58498

@@ -33,6 +33,7 @@ class Showo(ModelMixin, ConfigMixin):
             w_clip_vit,
             vocab_size,
             llm_vocab_size,
+            accelerator,
             llm_model_path='',
             codebook_size=8192,
             num_vq_tokens=256,
@@ -45,6 +46,7 @@ class Showo(ModelMixin, ConfigMixin):
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.model = Transformer(vocab_size)
         self.output_size = self.vocab_size
+        self.accelerator = accelerator
 
         if self.w_clip_vit:
             self.mm_projector = torch.nn.Sequential(
@@ -69,13 +71,17 @@ class Showo(ModelMixin, ConfigMixin):
             max_seq_length=128,
             labels_mask_text=None,
             labels_mask_image=None,
+            global_step=None,
             **kwargs,
     ):
 
         assert input_embeddings is None
 
-        # torch.save(input_ids, Path(__file__).parent / 'input_ids_3.pt')
-        # torch.save(attention_mask, Path(__file__).parent / 'attention_mask_3.pt')
+        # Save tensors on first step if main process
+        if global_step == 0 and self.accelerator.is_main_process:
+            print("saved input ids and attention mask")
+            torch.save(input_ids, Path(__file__).parent / 'input_ids.pt')
+            torch.save(attention_mask, Path(__file__).parent / 'attention_mask.pt')
 
         logits = self.model(input_ids=input_ids, attention_mask=attention_mask)['logits']
 
