@@ -21,6 +21,7 @@ from .sampling import cosine_schedule, mask_by_random_topk
 from .phi import PhiForCausalLM
 from .base import Transformer
 from pathlib import Path
+from training.utils import mask_or_random_replace_tokens
 
 
 
@@ -72,10 +73,38 @@ class Showo(ModelMixin, ConfigMixin):
             labels_mask_text=None,
             labels_mask_image=None,
             global_step=None,
+            soi_id=None,
+            eoi_id=None,
+            config=None,
+            mask_schedule=None,
+            ignore_id=-100,
             **kwargs,
     ):
 
         assert input_embeddings is None
+
+        # Apply masking to t2i tokens if labels is provided and we have batch_size_t2i > 0
+        mask_prob = None
+        if labels is not None and batch_size_t2i > 0:
+            # Extract t2i portion
+            input_ids_t2i = input_ids[:batch_size_t2i]
+            labels_t2i = labels[:batch_size_t2i]
+
+            # Apply masking
+            input_ids_t2i, labels_t2i, loss_weight, mask_prob = mask_or_random_replace_tokens(
+                input_ids_t2i,
+                labels_t2i,
+                self.config.mask_token_id,
+                soi_id,
+                eoi_id,
+                config,
+                mask_schedule,
+                ignore_id,
+            )
+
+            # Replace t2i portion in input_ids and labels
+            input_ids = torch.cat([input_ids_t2i, input_ids[batch_size_t2i:]], dim=0)
+            labels = torch.cat([labels_t2i, labels[batch_size_t2i:]], dim=0)
 
         # Save tensors on first step if main process
         if global_step == 0 and self.accelerator.is_main_process:
@@ -105,7 +134,7 @@ class Showo(ModelMixin, ConfigMixin):
                 labels[-batch_size_mmu:, 1:].contiguous().view(-1), ignore_index=-100,
             )
 
-            return logits, loss_t2i, loss_lm, loss_mmu
+            return logits, loss_t2i, loss_lm, loss_mmu, mask_prob
 
         return logits
 

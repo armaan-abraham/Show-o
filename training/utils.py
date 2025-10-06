@@ -74,7 +74,7 @@ def get_loss_weight(t, mask, min_val=0.3):
     return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
 
 
-def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, soi_id, eoi_id, config, mask_schedule, is_train=True, ignore_id=-100):
+def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, soi_id, eoi_id, config, mask_schedule, ignore_id=-100):
     """
     Apply masking to unified token sequence (after unified prompting).
 
@@ -86,7 +86,6 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
         eoi_id: End of image token ID
         config: Training configuration
         mask_schedule: Masking schedule function
-        is_train: Whether in training mode
         ignore_id: ID to use for ignored positions in labels (default: -100)
 
     Returns:
@@ -110,15 +109,11 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
     image_start_indices = soi_positions + 1  # [B]
 
     # Sample masking probabilities
-    if not is_train and config.training.get("eval_mask_ratios", None):
-        mask_prob = random.choices(config.training.eval_mask_ratios, k=batch_size)
-        mask_prob = torch.tensor(mask_prob, device=device)
-    else:
-        # Sample a random timestep for each image
-        timesteps = torch.rand(batch_size, device=device)
-        # Sample a random mask probability for each image using timestep and cosine schedule
-        mask_prob = mask_schedule(timesteps)
-        mask_prob = mask_prob.clip(config.training.min_masking_rate)
+    # Sample a random timestep for each image
+    timesteps = torch.rand(batch_size, device=device)
+    # Sample a random mask probability for each image using timestep and cosine schedule
+    mask_prob = mask_schedule(timesteps)
+    mask_prob = mask_prob.clip(config.training.min_masking_rate)
 
     # Compute number of tokens to mask per sample
     num_token_masked = (num_image_tokens * mask_prob).round().clamp(min=1).to(torch.long)  # [B]

@@ -55,7 +55,7 @@ from llava.llava_data_vq_unified import get_instruct_data_loader
 
 SYSTEM_PROMPT_LEN = 28
 
-from training.utils import get_config, flatten_omega_conf, mask_or_random_replace_tokens, AverageMeter
+from training.utils import get_config, flatten_omega_conf, AverageMeter
 
 try:
     import apex
@@ -386,21 +386,10 @@ def main():
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
                 data_time_m.update(time.time() - end)
 
-                # Encode images to image tokens, mask them and create input and labels
+                # Encode images to image tokens and create input and labels
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
                 input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
-                input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
-                    input_ids,
-                    labels,
-                    mask_id,
-                    int(uni_prompting.sptids_dict['<|soi|>']),
-                    int(uni_prompting.sptids_dict['<|eoi|>']),
-                    config,
-                    mask_schedule,
-                    True,  # is_train
-                    uni_prompting.ignore_id,
-                )
                 attention_mask = create_attention_mask_predict_next(input_ids,
                                                                     pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
                                                                     soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
@@ -441,7 +430,7 @@ def main():
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
             with accelerator.accumulate(model):
-                logits, loss_t2i, loss_lm, loss_mmu = model(
+                logits, loss_t2i, loss_lm, loss_mmu, mask_prob = model(
                     input_ids=input_ids,
                     input_embeddings=None,
                     attention_mask=attention_mask,
@@ -452,6 +441,11 @@ def main():
                     batch_size_mmu=batch_size_mmu,
                     max_seq_length=config.dataset.preprocessing.max_seq_length,
                     global_step=global_step,
+                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
+                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
+                    config=config,
+                    mask_schedule=mask_schedule,
+                    ignore_id=uni_prompting.ignore_id,
                 )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
