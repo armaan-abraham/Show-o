@@ -43,19 +43,12 @@ class Showo(ModelMixin, ConfigMixin):
             **kwargs,
     ):
         super().__init__()
-        assert w_clip_vit is False, "clip_vit must be False"
+        assert not w_clip_vit
         self.vocab_size = vocab_size
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.model = Transformer(vocab_size)
         self.output_size = self.vocab_size
         self.accelerator = accelerator
-
-        if self.w_clip_vit:
-            self.mm_projector = torch.nn.Sequential(
-                torch.nn.Linear(1024, 2048),
-                torch.nn.GELU(),
-                torch.nn.Linear(2048, 2048)
-            )
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -69,7 +62,6 @@ class Showo(ModelMixin, ConfigMixin):
             pad_id,
             soi_id,
             eoi_id,
-            mask_dtype=torch.bfloat16,
     ):
         """
         Assemble attention masks for all three flows: t2i, lm, and mmu.
@@ -82,7 +74,6 @@ class Showo(ModelMixin, ConfigMixin):
             pad_id: Padding token ID
             soi_id: Start of image token ID
             eoi_id: End of image token ID
-            mask_dtype: Data type for the attention mask (default: torch.bfloat16)
 
         Returns:
             attention_mask: Concatenated attention mask tensor for all flows
@@ -99,7 +90,7 @@ class Showo(ModelMixin, ConfigMixin):
                 eoi_id=eoi_id,
                 rm_pad_in_image=True,
                 return_inverse_mask=True
-            ).to(mask_dtype)
+            ).to(torch.bfloat16)
             attention_masks.append(attention_mask_t2i)
 
         # LM attention mask
@@ -111,7 +102,7 @@ class Showo(ModelMixin, ConfigMixin):
                 soi_id=soi_id,
                 eoi_id=eoi_id,
                 return_inverse_mask=True
-            ).to(mask_dtype)
+            ).to(torch.bfloat16)
             attention_masks.append(attention_mask_lm)
 
         # MMU attention mask
@@ -121,7 +112,7 @@ class Showo(ModelMixin, ConfigMixin):
                 input_ids_mmu,
                 eoi_id=eoi_id,
                 return_inverse_mask=True
-            ).to(mask_dtype)
+            ).to(torch.bfloat16)
             attention_masks.append(attention_mask_mmu)
 
         # Concatenate all attention masks
@@ -133,7 +124,6 @@ class Showo(ModelMixin, ConfigMixin):
             self,
             input_ids,
             input_embeddings=None,
-            attention_mask=None,
             labels=None,
             label_smoothing=0.0,
             batch_size_t2i=0,
@@ -143,6 +133,7 @@ class Showo(ModelMixin, ConfigMixin):
             labels_mask_text=None,
             labels_mask_image=None,
             global_step=None,
+            pad_id=None,
             soi_id=None,
             eoi_id=None,
             config=None,
@@ -176,6 +167,17 @@ class Showo(ModelMixin, ConfigMixin):
                 # Replace t2i portion in input_ids and labels
                 input_ids = torch.cat([input_ids_t2i, input_ids[batch_size_t2i:]], dim=0)
                 labels = torch.cat([labels_t2i, labels[batch_size_t2i:]], dim=0)
+
+        # Assemble attention mask for all flows
+        attention_mask = self.assemble_attention_mask(
+            input_ids=input_ids,
+            batch_size_t2i=batch_size_t2i,
+            batch_size_lm=batch_size_lm,
+            batch_size_mmu=batch_size_mmu,
+            pad_id=pad_id,
+            soi_id=soi_id,
+            eoi_id=eoi_id,
+        )
 
         # Save tensors on first step if main process
         if global_step == 0 and self.accelerator.is_main_process:

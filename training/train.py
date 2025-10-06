@@ -349,9 +349,6 @@ def main():
 
     vq_model.to(device=accelerator.device)
 
-    # TODO: move mask
-    mask_dtype = torch.bfloat16
-
     ##################################
     #             Training          #
     #################################
@@ -411,25 +408,10 @@ def main():
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
-                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-                # Assemble attention mask for all flows
-                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-                attention_mask = model.assemble_attention_mask(
-                    input_ids=input_ids,
-                    batch_size_t2i=batch_size_t2i,
-                    batch_size_lm=batch_size_lm,
-                    batch_size_mmu=batch_size_mmu,
-                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
-                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
-                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
-                    mask_dtype=mask_dtype,
-                )
-
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu, mask_prob = model(
                     input_ids=input_ids,
                     input_embeddings=None,
-                    attention_mask=attention_mask,
                     labels=labels,
                     label_smoothing=config.training.label_smoothing,
                     batch_size_t2i=batch_size_t2i,
@@ -437,6 +419,7 @@ def main():
                     batch_size_mmu=batch_size_mmu,
                     max_seq_length=config.dataset.preprocessing.max_seq_length,
                     global_step=global_step,
+                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
                     soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
                     eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
                     config=config,
