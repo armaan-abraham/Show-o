@@ -86,15 +86,6 @@ def group_by_keys_nothrow(data, keys=base_plus_ext, lcase=True, suffixes=None, h
     if valid_sample(current_sample):
         yield current_sample
 
-
-def tarfile_to_samples_nothrow(src, handler=wds.warn_and_continue):
-    # NOTE this is a re-impl of the webdataset impl with group_by_keys that doesn't throw
-    streams = url_opener(src, handler=handler)
-    files = tar_file_expander(streams, handler=handler)
-    samples = group_by_keys_nothrow(files, handler=handler)
-    return samples
-
-
 def image_transform(sample, resolution=256):
     image = sample["images"]
     image = transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BICUBIC)(image)
@@ -123,26 +114,17 @@ class Text2ImageDataset:
             train_shards_path_or_url: Union[str, List[str]],
             tokenizer: PreTrainedTokenizer,
             max_seq_length: int,
-            num_train_examples: int,
             per_gpu_batch_size: int,
-            global_batch_size: int,
             num_workers: int,
+            seed: int ,
             resolution: int = 256,
             shuffle_buffer_size: int = 1000,
             pin_memory: bool = False,
             persistent_workers: bool = False,
             is_captioning: bool = False,
             add_caption_prompt: bool = False,
-            long_caption: bool = True,
     ):
-        if f"{train_shards_path_or_url}.yaml" in os.listdir('./configs'):
-            with open(f"./configs/{train_shards_path_or_url}.yaml") as f:
-                train_shards_path_or_url = yaml.safe_load(f)
-        self.long_caption = long_caption
-        self.external_caption_path = external_caption_path
-        self.external_journeydb_caption_path = external_journeydb_caption_path
-        self.external_laion12m_caption_path = external_laion12m_caption_path
-        self.external_cc12m_caption_path = external_cc12m_caption_path
+        print("num workers", num_workers)
         self.is_captioning = is_captioning
         self.add_caption_prompt = add_caption_prompt
         if self.add_caption_prompt:
@@ -151,12 +133,6 @@ class Text2ImageDataset:
                 self.caption_prompt = ['USER: \n' + prompt + ' ASSISTANT:' for prompt in self.caption_prompt]
         else:
             self.caption_prompt = None
-
-        if external_journeydb_caption_path != '':
-            with open(external_journeydb_caption_path) as file:
-                self.journeydb_caption = json.load(file)
-        else:
-            self.journeydb_caption = None
 
         def tokenize(text):
             if tokenizer is not None:
@@ -173,66 +149,46 @@ class Text2ImageDataset:
             # flatten list using itertools
             train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
 
-        if external_caption_path != '':
-            processing_pipeline = [
-                wds.decode("pil", handler=wds.ignore_and_continue),
-                wds.map(self.load_external_caption, handler=wds.ignore_and_continue),
-                wds.rename(
-                    images="jpg;png;jpeg;webp",
-                    input_ids="text;txt;caption",
-                    handler=wds.warn_and_continue,
-                ),
-                wds.map(filter_keys(set(["images", "input_ids"]))),
-                wds.map(partial(image_transform, resolution=resolution), handler=wds.warn_and_continue),
-                wds.map_dict(
-                    input_ids=tokenize,
-                    handler=wds.warn_and_continue,
-                ),
-            ]
-        else:
-            processing_pipeline = [
-                wds.decode("pil", handler=wds.ignore_and_continue),
-                wds.rename(
-                    images="jpg;png;jpeg;webp",
-                    input_ids="text;txt;caption",
-                    handler=wds.warn_and_continue,
-                ),
-                wds.map(filter_keys(set(["images", "input_ids"]))),
-                wds.map(partial(image_transform, resolution=resolution), handler=wds.warn_and_continue),
-                wds.map_dict(
-                    input_ids=tokenize,
-                    handler=wds.warn_and_continue,
-                ),
-            ]
+        processing_pipeline = [
+            wds.decode("pil", handler=wds.ignore_and_continue),
+            wds.rename(
+                images="jpg;png;jpeg;webp",
+                input_ids="text;txt;caption",
+                handler=wds.warn_and_continue,
+            ),
+            wds.map(filter_keys(set(["images", "input_ids"]))),
+            wds.map(partial(image_transform, resolution=resolution), handler=wds.warn_and_continue),
+            wds.map_dict(
+                input_ids=tokenize,
+                handler=wds.warn_and_continue,
+            ),
+        ]
 
         pipeline = [
-            wds.ResampledShards(train_shards_path_or_url),
-            tarfile_to_samples_nothrow,
-            wds.shuffle(shuffle_buffer_size),
+            wds.SimpleShardList(train_shards_path_or_url),
+            wds.detshuffle(
+                seed=seed
+            ),
+            wds.split_by_node,
+            wds.split_by_worker,
+            wds.tarfile_to_samples(handler=wds.warn_and_continue),
+            wds.shuffle(
+                shuffle_buffer_size,
+                rng=random.Random(seed),
+            ),
             *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
+        self._train_dataset = wds.DataPipeline(*pipeline)
 
-        num_batches = math.ceil(num_train_examples / global_batch_size)
-        num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
-        num_batches = num_worker_batches * num_workers
-        num_samples = num_batches * global_batch_size
-
-        # each worker is iterating over this
-        self._train_dataset = wds.DataPipeline(*pipeline).with_epoch(num_worker_batches)
         self._train_dataloader = wds.WebLoader(
             self._train_dataset,
             batch_size=None,
             shuffle=False,
             num_workers=num_workers,
-            # num_workers=0,
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
-            # persistent_workers=0,
         )
-        # add meta-data to dataloader instance for convenience
-        self._train_dataloader.num_batches = num_batches
-        self._train_dataloader.num_samples = num_samples
 
     @property
     def train_dataset(self):

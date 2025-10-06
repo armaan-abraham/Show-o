@@ -157,9 +157,8 @@ def main():
         logging.info(f"Saving config to {config_path}")
         OmegaConf.save(config, config_path)
 
-    # If passed along, set the training seed now.
-    if config.training.seed is not None:
-        set_seed(config.training.seed)
+    assert config.training.seed is not None
+    set_seed(config.training.seed)
 
     #########################
     # MODELS and OPTIMIZER  #
@@ -288,21 +287,19 @@ def main():
 
     train_dataloader_t2i = DataLoader(dataset_imagenet, batch_size=config.training.batch_size_t2i,
                                     sampler=sampler, collate_fn=dataset_imagenet.collate_fn,
-                                    shuffle=shuffle, num_workers=os.cpu_count())
+                                    shuffle=shuffle, num_workers=dataset_config.num_workers)
     num_update_steps_per_epoch = math.ceil(len(dataset_imagenet) / total_batch_size_t2i)
     num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
 
-    total_batch_size_mmu_without_accum = config.training.batch_size_mmu * accelerator.num_processes
     # Data for image captioning
     assert config.dataset.und_type == "captioning"
     dataset_mmu = Text2ImageDataset(
         train_shards_path_or_url=dataset_config.train_mmu_shards_path_or_url,
         tokenizer=None,  # we want to get raw texts
         max_seq_length=preproc_config.max_seq_length,
-        num_train_examples=config.experiment.max_train_examples_mmu,
         per_gpu_batch_size=config.training.batch_size_mmu,
-        global_batch_size=total_batch_size_mmu_without_accum,
-        num_workers=os.cpu_count(),
+        num_workers=dataset_config.num_workers,
+        seed=config.training.seed,
         resolution=preproc_config.resolution,
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
@@ -320,7 +317,7 @@ def main():
         dataset_lm,
         batch_size=config.training.batch_size_lm,
         collate_fn=dataset_lm.collate_fn,
-        num_workers=os.cpu_count()
+        num_workers=dataset_config.num_workers
     )
 
     # Combine these dataloaders into a single iterable model
