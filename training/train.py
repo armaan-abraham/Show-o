@@ -361,35 +361,6 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
 
-    @torch.no_grad()
-    def prepare_inputs_and_labels(
-            pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
-            texts: Union[str, str],
-            min_masking_rate: float = 0.0,
-            is_train: bool = True,
-    ):
-
-        image_tokens = vq_model.get_code(pixel_values_or_image_ids)
-        image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
-
-        # First apply unified prompting (before masking)
-        input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
-
-        # Then apply masking to the unified sequence
-        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
-            input_ids,
-            labels,
-            mask_id,
-            int(uni_prompting.sptids_dict['<|soi|>']),
-            int(uni_prompting.sptids_dict['<|eoi|>']),
-            config,
-            mask_schedule,
-            is_train,
-            uni_prompting.ignore_id,
-        )
-
-        return input_ids, labels, mask_prob, image_tokens
-
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
@@ -407,58 +378,67 @@ def main():
             batch_size_lm = len(batch["lm_flow"]["input_ids"])
             batch_size_mmu = batch["mmu_flow"]["images"].shape[0]
 
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            # Build formatted sequences for class-conditional/text-to-image generation
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            pixel_values, texts = batch["t2i_flow"]["images"], batch["t2i_flow"]["input_ids"]
-            pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-            data_time_m.update(time.time() - end)
+            with torch.no_grad():
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                # Build formatted sequences for class-conditional/text-to-image generation
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                pixel_values, texts = batch["t2i_flow"]["images"], batch["t2i_flow"]["input_ids"]
+                pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+                data_time_m.update(time.time() - end)
 
-            # Encode images to image tokens, mask them and create input and labels
-            (
-                input_ids,
-                labels,
-                mask_prob,
-                image_tokens_ori
-            ) = prepare_inputs_and_labels(pixel_values, texts, config.training.min_masking_rate)
-            attention_mask = create_attention_mask_predict_next(input_ids,
-                                                                pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
-                                                                soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
-                                                                eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
-                                                                rm_pad_in_image=True,
-                                                                return_inverse_mask=True)
-            attention_mask = attention_mask.to(mask_dtype)
+                # Encode images to image tokens, mask them and create input and labels
+                image_tokens = vq_model.get_code(pixel_values)
+                image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
+                input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
+                input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
+                    input_ids,
+                    labels,
+                    mask_id,
+                    int(uni_prompting.sptids_dict['<|soi|>']),
+                    int(uni_prompting.sptids_dict['<|eoi|>']),
+                    config,
+                    mask_schedule,
+                    True,  # is_train
+                    uni_prompting.ignore_id,
+                )
+                attention_mask = create_attention_mask_predict_next(input_ids,
+                                                                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
+                                                                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
+                                                                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
+                                                                    rm_pad_in_image=True,
+                                                                    return_inverse_mask=True)
+                attention_mask = attention_mask.to(mask_dtype)
 
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            # Build formatted sequences for language modeling
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            texts_lm = batch["lm_flow"]["input_ids"]
-            input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm')
-            attention_mask_lm = create_attention_mask_predict_next(input_ids_lm.to(input_ids.device),
-                                                                   pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
-                                                                   soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
-                                                                   eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
-            attention_mask_lm = attention_mask_lm.to(mask_dtype)
-            attention_mask = torch.cat([attention_mask, attention_mask_lm], dim=0)
-            input_ids = torch.cat((input_ids, input_ids_lm.to(input_ids.device)), dim=0)
-            labels = torch.cat((labels, labels_lm.to(input_ids.device)), dim=0)
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                # Build formatted sequences for language modeling
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                texts_lm = batch["lm_flow"]["input_ids"]
+                input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm')
+                attention_mask_lm = create_attention_mask_predict_next(input_ids_lm.to(input_ids.device),
+                                                                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
+                                                                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
+                                                                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
+                attention_mask_lm = attention_mask_lm.to(mask_dtype)
+                attention_mask = torch.cat([attention_mask, attention_mask_lm], dim=0)
+                input_ids = torch.cat((input_ids, input_ids_lm.to(input_ids.device)), dim=0)
+                labels = torch.cat((labels, labels_lm.to(input_ids.device)), dim=0)
 
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            # Build formatted sequences for captioning/multimodal understanding
-            # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
-            pixel_values_mmu, texts_mmu = batch["mmu_flow"]["images"], batch["mmu_flow"]["input_ids"]
-            pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
-            image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
-            image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
-            input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
-            input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                # Build formatted sequences for captioning/multimodal understanding
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                pixel_values_mmu, texts_mmu = batch["mmu_flow"]["images"], batch["mmu_flow"]["input_ids"]
+                pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
+                image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
+                image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
+                input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
+                input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
 
-            attention_mask_mmu = create_attention_mask_for_mmu(input_ids_mmu.to(input_ids.device),
-                                                               eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
-            attention_mask_mmu = attention_mask_mmu.to(mask_dtype)
-            attention_mask = torch.cat([attention_mask, attention_mask_mmu], dim=0)
-            input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
-            labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
+                attention_mask_mmu = create_attention_mask_for_mmu(input_ids_mmu.to(input_ids.device),
+                                                                eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
+                attention_mask_mmu = attention_mask_mmu.to(mask_dtype)
+                attention_mask = torch.cat([attention_mask, attention_mask_mmu], dim=0)
+                input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
+                labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu = model(

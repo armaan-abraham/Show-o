@@ -103,7 +103,6 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
     soi_idx = (first_row == soi_id).nonzero(as_tuple=True)[0][0].item()
     eoi_idx = (first_row == eoi_id).nonzero(as_tuple=True)[0][0].item()
     num_image_tokens = eoi_idx - soi_idx - 1  # tokens between soi and eoi (exclusive)
-    print("Num image tokens", num_image_tokens)
 
     # Find starting index of images in each row (vectorized)
     # Find soi token positions and increment by 1 to get first image token position
