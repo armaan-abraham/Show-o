@@ -22,6 +22,7 @@ from .phi import PhiForCausalLM
 from .base import Transformer
 from pathlib import Path
 from training.utils import mask_or_random_replace_tokens
+from training.prompting_utils import create_attention_mask_predict_next, create_attention_mask_for_mmu
 
 
 
@@ -58,6 +59,75 @@ class Showo(ModelMixin, ConfigMixin):
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
+
+    def assemble_attention_mask(
+            self,
+            input_ids,
+            batch_size_t2i,
+            batch_size_lm,
+            batch_size_mmu,
+            pad_id,
+            soi_id,
+            eoi_id,
+            mask_dtype=torch.bfloat16,
+    ):
+        """
+        Assemble attention masks for all three flows: t2i, lm, and mmu.
+
+        Args:
+            input_ids: Concatenated input_ids tensor [batch_size_t2i + batch_size_lm + batch_size_mmu, seq_length]
+            batch_size_t2i: Batch size for text-to-image flow
+            batch_size_lm: Batch size for language modeling flow
+            batch_size_mmu: Batch size for multimodal understanding flow
+            pad_id: Padding token ID
+            soi_id: Start of image token ID
+            eoi_id: End of image token ID
+            mask_dtype: Data type for the attention mask (default: torch.bfloat16)
+
+        Returns:
+            attention_mask: Concatenated attention mask tensor for all flows
+        """
+        attention_masks = []
+
+        # T2I attention mask
+        if batch_size_t2i > 0:
+            input_ids_t2i = input_ids[:batch_size_t2i]
+            attention_mask_t2i = create_attention_mask_predict_next(
+                input_ids_t2i,
+                pad_id=pad_id,
+                soi_id=soi_id,
+                eoi_id=eoi_id,
+                rm_pad_in_image=True,
+                return_inverse_mask=True
+            ).to(mask_dtype)
+            attention_masks.append(attention_mask_t2i)
+
+        # LM attention mask
+        if batch_size_lm > 0:
+            input_ids_lm = input_ids[batch_size_t2i:batch_size_t2i + batch_size_lm]
+            attention_mask_lm = create_attention_mask_predict_next(
+                input_ids_lm,
+                pad_id=pad_id,
+                soi_id=soi_id,
+                eoi_id=eoi_id,
+                return_inverse_mask=True
+            ).to(mask_dtype)
+            attention_masks.append(attention_mask_lm)
+
+        # MMU attention mask
+        if batch_size_mmu > 0:
+            input_ids_mmu = input_ids[batch_size_t2i + batch_size_lm:]
+            attention_mask_mmu = create_attention_mask_for_mmu(
+                input_ids_mmu,
+                eoi_id=eoi_id,
+                return_inverse_mask=True
+            ).to(mask_dtype)
+            attention_masks.append(attention_mask_mmu)
+
+        # Concatenate all attention masks
+        attention_mask = torch.cat(attention_masks, dim=0)
+
+        return attention_mask
 
     def forward(
             self,

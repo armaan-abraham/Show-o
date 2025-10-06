@@ -390,25 +390,12 @@ def main():
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
                 input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
-                attention_mask = create_attention_mask_predict_next(input_ids,
-                                                                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
-                                                                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
-                                                                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
-                                                                    rm_pad_in_image=True,
-                                                                    return_inverse_mask=True)
-                attention_mask = attention_mask.to(mask_dtype)
 
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 # Build formatted sequences for language modeling
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 texts_lm = batch["lm_flow"]["input_ids"]
                 input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm')
-                attention_mask_lm = create_attention_mask_predict_next(input_ids_lm.to(input_ids.device),
-                                                                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
-                                                                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
-                                                                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
-                attention_mask_lm = attention_mask_lm.to(mask_dtype)
-                attention_mask = torch.cat([attention_mask, attention_mask_lm], dim=0)
                 input_ids = torch.cat((input_ids, input_ids_lm.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_lm.to(input_ids.device)), dim=0)
 
@@ -421,13 +408,22 @@ def main():
                 image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
                 input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
                 input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
-
-                attention_mask_mmu = create_attention_mask_for_mmu(input_ids_mmu.to(input_ids.device),
-                                                                eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']))
-                attention_mask_mmu = attention_mask_mmu.to(mask_dtype)
-                attention_mask = torch.cat([attention_mask, attention_mask_mmu], dim=0)
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
+
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                # Assemble attention mask for all flows
+                # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
+                attention_mask = model.assemble_attention_mask(
+                    input_ids=input_ids,
+                    batch_size_t2i=batch_size_t2i,
+                    batch_size_lm=batch_size_lm,
+                    batch_size_mmu=batch_size_mmu,
+                    pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
+                    soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
+                    eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
+                    mask_dtype=mask_dtype,
+                )
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu, mask_prob = model(
