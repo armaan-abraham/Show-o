@@ -74,35 +74,93 @@ def get_loss_weight(t, mask, min_val=0.3):
     return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
 
 
-def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, is_train=True):
-    batch_size, seq_len = image_tokens.shape
+def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, soi_id, eoi_id, config, mask_schedule, is_train=True, ignore_id=-100):
+    """
+    Apply masking to unified token sequence (after unified prompting).
 
+    Args:
+        unified_input_ids: Token sequence after unified prompting [B, L]
+        unified_labels: Label sequence after unified prompting [B, L]
+        mask_id: ID to use for masked tokens
+        soi_id: Start of image token ID
+        eoi_id: End of image token ID
+        config: Training configuration
+        mask_schedule: Masking schedule function
+        is_train: Whether in training mode
+        ignore_id: ID to use for ignored positions in labels (default: -100)
+
+    Returns:
+        masked_input_ids: Input tokens with masks applied
+        masked_labels: Label tokens with masks applied
+        loss_weight: Loss weights (None in this implementation)
+        mask_prob: Masking probabilities used
+    """
+    batch_size, total_seq_len = unified_input_ids.shape
+    device = unified_input_ids.device
+
+    # Compute number of image tokens from first row by counting tokens between soi and eoi
+    first_row = unified_input_ids[0]
+    soi_idx = (first_row == soi_id).nonzero(as_tuple=True)[0][0].item()
+    eoi_idx = (first_row == eoi_id).nonzero(as_tuple=True)[0][0].item()
+    num_image_tokens = eoi_idx - soi_idx - 1  # tokens between soi and eoi (exclusive)
+    print("Num image tokens", num_image_tokens)
+
+    # Find starting index of images in each row (vectorized)
+    # Find soi token positions and increment by 1 to get first image token position
+    soi_positions = (unified_input_ids == soi_id).long().argmax(dim=1)
+    image_start_indices = soi_positions + 1  # [B]
+
+    # Sample masking probabilities
     if not is_train and config.training.get("eval_mask_ratios", None):
         mask_prob = random.choices(config.training.eval_mask_ratios, k=batch_size)
-        mask_prob = torch.tensor(mask_prob, device=image_tokens.device)
+        mask_prob = torch.tensor(mask_prob, device=device)
     else:
         # Sample a random timestep for each image
-        timesteps = torch.rand(batch_size, device=image_tokens.device)
+        timesteps = torch.rand(batch_size, device=device)
         # Sample a random mask probability for each image using timestep and cosine schedule
         mask_prob = mask_schedule(timesteps)
         mask_prob = mask_prob.clip(config.training.min_masking_rate)
 
-    # creat a random mask for each image
-    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+    # Compute number of tokens to mask per sample
+    num_token_masked = (num_image_tokens * mask_prob).round().clamp(min=1).to(torch.long)  # [B]
 
     assert "mask_contiguous_region_prob" not in config.training
 
-    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+    # Create random permutation for image tokens only
+    perm = torch.rand(batch_size, num_image_tokens, device=device).argsort(dim=-1)  # [B, S]
 
-    # mask images and create input and labels
+    # Select positions where permutation value < num_token_masked (consistent with original implementation)
+    mask = perm < num_token_masked.unsqueeze(-1)  # [B, S]
+
+    # Get indices where mask is True
+    row_idx, col_idx = torch.where(mask)
+
+    # Convert image-space indices to unified-space indices by adding start offset
+    unified_col_idx = col_idx + image_start_indices[row_idx]
+
+    # Clone input_ids and labels
+    masked_input_ids = unified_input_ids.clone()
+    masked_labels = unified_labels.clone()
+
+    # Apply masking using index_put_
     assert config.training["noise_type"] == "mask"
-    input_ids = torch.where(mask, mask_id, image_tokens)
+    masked_input_ids.index_put_((row_idx, unified_col_idx), torch.full_like(row_idx, int(mask_id)))
 
-    labels = torch.where(mask, image_tokens, -100)
+    # Create mask for all image token positions (True = ignore, False = predict) - vectorized
+    positions = torch.arange(total_seq_len, device=device).unsqueeze(0)  # [1, L]
+    start_indices = image_start_indices.unsqueeze(1)  # [B, 1]
+    end_indices = start_indices + num_image_tokens  # [B, 1]
+    image_region_mask = (positions >= start_indices) & (positions < end_indices)  # [B, L]
+
+    # Set masked positions to False (we want to predict these)
+    image_region_mask.index_put_((row_idx, unified_col_idx), torch.zeros_like(row_idx, dtype=torch.bool))
+
+    # Apply mask: set all True positions to ignore_id
+    masked_labels = torch.where(image_region_mask, ignore_id, unified_labels)
+
     loss_weight = None
 
-    return input_ids, labels, loss_weight, mask_prob
+    return masked_input_ids, masked_labels, loss_weight, mask_prob
 
 
 ##################################################

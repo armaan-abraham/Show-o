@@ -372,15 +372,21 @@ def main():
         image_tokens = vq_model.get_code(pixel_values_or_image_ids)
         image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
 
-        # create MLM mask and labels
+        # First apply unified prompting (before masking)
+        input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
+
+        # Then apply masking to the unified sequence
         input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
-            image_tokens,
+            input_ids,
+            labels,
             mask_id,
+            int(uni_prompting.sptids_dict['<|soi|>']),
+            int(uni_prompting.sptids_dict['<|eoi|>']),
             config,
-            mask_schedule=mask_schedule,
-            is_train=is_train,
+            mask_schedule,
+            is_train,
+            uni_prompting.ignore_id,
         )
-        input_ids, masks, labels = uni_prompting((texts, input_ids, labels), 't2i')
 
         return input_ids, labels, mask_prob, image_tokens
 
