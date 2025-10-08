@@ -20,16 +20,22 @@ model:
     vq_model:
         type: "magvitv2"
         vq_model_name: "showlab/magvitv2"
+    
+    text_tokenizer: "microsoft/phi-1_5"
 
-    showo:
-        pretrained_model_path: "showlab/show-o"
-        w_clip_vit: False
+    transformer:
         vocab_size: 58498
-        llm_vocab_size: 50295
-        llm_model_path: 'microsoft/phi-1_5'
-        codebook_size: 8192
-        num_vq_tokens: 256
-        num_new_special_tokens: 10  # <|soi|> <|eoi|> <|sov|> <|eov|> <|t2i|> <|mmu|> <|t2v|> <|v2v|> <|lvg|> <|pad|>
+        max_seq_len: 387
+
+        num_layers: 2
+        d_model: 64
+        d_mlp: 256
+
+        num_heads: 4
+
+        dtype: bf16
+
+
 
     gradient_checkpointing: True
 

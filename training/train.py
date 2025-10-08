@@ -163,9 +163,7 @@ def main():
     #########################
     # MODELS and OPTIMIZER  #
     #########################
-    logger.info("Loading models and optimizer")
-
-    tokenizer = AutoTokenizer.from_pretrained(config.model.showo.llm_model_path, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(config.model.text_tokenizer, padding_side="left")
 
     # unified prompting for show-o
     uni_prompting = UniversalPrompting(tokenizer, max_text_len=config.dataset.preprocessing.max_seq_length,
@@ -189,7 +187,7 @@ def main():
     vq_model.requires_grad_(False)
 
     # Initialize Show-o model
-    model = Showo(**config.model.showo, accelerator=accelerator).to(accelerator.device)
+    model = Showo(accelerator=accelerator, **config.model.transformer).to(accelerator.device)
     mask_id = model.mask_token_id
 
     ##################################
@@ -407,6 +405,8 @@ def main():
                 input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
+
+                assert input_ids.shape[0] < config.model.transformer.vocab_size
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu, mask_prob = model(

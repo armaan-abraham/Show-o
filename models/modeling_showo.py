@@ -32,22 +32,26 @@ class Showo(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
             self,
-            w_clip_vit,
-            vocab_size,
-            llm_vocab_size,
+            vocab_size: int,
+            max_seq_len: int,
+            num_layers: int,
+            d_model: int,
+            d_mlp: int,
+            num_heads: int,
+            dtype: str,
             accelerator,
-            llm_model_path='',
-            codebook_size=8192,
-            num_vq_tokens=256,
-            load_from_showo=True,
-            **kwargs,
     ):
         super().__init__()
-        assert not w_clip_vit
-        self.vocab_size = vocab_size
         self.register_to_config(mask_token_id=vocab_size - 1)
-        self.model = Transformer(vocab_size)
-        self.output_size = self.vocab_size
+        self.model = Transformer(
+            vocab_size=vocab_size,
+            max_seq_len=max_seq_len,
+            num_layers=num_layers,
+            d_model=d_model,
+            d_mlp=d_mlp,
+            num_heads=num_heads,
+            dtype=dtype,
+        )
         self.accelerator = accelerator
 
     def _set_gradient_checkpointing(self, module, value=False):
@@ -185,25 +189,25 @@ class Showo(ModelMixin, ConfigMixin):
             torch.save(input_ids, Path(__file__).parent / 'input_ids.pt')
             torch.save(attention_mask, Path(__file__).parent / 'attention_mask.pt')
 
-        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)['logits']
+        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
 
         if labels is not None:
             # 1. Mask token prediction (discrete diffusion) for image generation
             # Note that, max_seq_length indicates the maximum number of text tokens, maybe a bit confused.
             loss_t2i = F.cross_entropy(
-                logits[:batch_size_t2i, max_seq_length + 1:].contiguous().view(-1, self.output_size),
+                logits[:batch_size_t2i, max_seq_length + 1:].contiguous().view(-1, self.config.vocab_size),
                 labels[:batch_size_t2i, max_seq_length + 1:].contiguous().view(-1), ignore_index=-100,
             )
 
             # 2. Next token prediction for language modeling
             loss_lm = F.cross_entropy(
-                logits[batch_size_t2i:batch_size_t2i + batch_size_lm, :-1].contiguous().view(-1, self.output_size),
+                logits[batch_size_t2i:batch_size_t2i + batch_size_lm, :-1].contiguous().view(-1, self.config.vocab_size),
                 labels[batch_size_t2i:batch_size_t2i + batch_size_lm, 1:].contiguous().view(-1), ignore_index=-100,
             )
 
             # 3. Next token prediction for captioning/multimodal understanding
             loss_mmu = F.cross_entropy(
-                logits[-batch_size_mmu:, :-1].contiguous().view(-1, self.output_size),
+                logits[-batch_size_mmu:, :-1].contiguous().view(-1, self.config.vocab_size),
                 labels[-batch_size_mmu:, 1:].contiguous().view(-1), ignore_index=-100,
             )
 
