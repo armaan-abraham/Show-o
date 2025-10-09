@@ -100,25 +100,34 @@ def reorder_and_group(input_ids, soi_id, eoi_id, num_image_tokens):
     img_reorder_idx, img_inference_groups = get_index_and_grouping(int(math.sqrt(num_image_tokens)))
 
     # Reorder image tokens using image token reorder indexes
-    img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size)
+    img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone()
     img_reorder_idx_src = img_reorder_idx + soi_idxs.unsqueeze(1)
-    print(img_reorder_idx_src.shape)
-    img_reorder_idx_dest = torch.arange(num_image_tokens, device=input_ids.device).unsqueeze(0) + soi_idxs.unsqueeze(1)
+    img_idx_ori = torch.arange(num_image_tokens, device=input_ids.device).unsqueeze(0) + soi_idxs.unsqueeze(1)
 
     batch_indices = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
-    input_ids[batch_indices, img_reorder_idx_dest] = input_ids[batch_indices, img_reorder_idx_src]
+    input_ids[batch_indices, img_idx_ori] = input_ids[batch_indices, img_reorder_idx_src]
 
     # Create full versions of reorder indexes and insert image portion we just used
-    reorder_idx = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size)
-    reorder_idx[torch.arange(batch_size, device=input_ids.device), soi_idxs:soi_idxs + num_image_tokens] = img_reorder_idx_src
+    reorder_idx = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
+    reorder_idx[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_reorder_idx_src
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
-    inference_groups = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size)
+    inference_groups = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
     num_inference_groups_per_img = img_inference_groups[-1]
-    img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size) + soi_idxs.unsqueeze(1)
-    inference_groups[torch.arange(batch_size, device=input_ids.device), soi_idxs:soi_idxs + num_image_tokens] = img_inference_groups
+    img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
+    inference_groups[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_inference_groups
+
     # Update the inference groups after the image to start after last image inference group
-    inference_groups[torch.arange(batch_size, device=input_ids.device), soi_idxs + num_image_tokens:] -= (num_image_tokens - num_inference_groups_per_img)
+    post_img_sizes = seq_len - (soi_idxs + num_image_tokens)
+    max_size = post_img_sizes.max()
+    # Make a grid [0..max_len-1] per row, then mask by each row's length
+    shared_seq = torch.arange(max_size)
+    grid = repeat(shared_seq, "len -> batch len", batch=batch_size).clone() + soi_idxs.unsqueeze(1) + num_image_tokens
+    mask = shared_seq.unsqueeze(0) < post_img_sizes.unsqueeze(1)   # [num_rows, max_len] boolean
+    post_img_idxs_by_row = grid[mask]
+
+    batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=input_ids.device), post_img_sizes)
+    inference_groups[batch_idx, post_img_idxs_by_row] -= (num_image_tokens - num_inference_groups_per_img)
 
     return reorder_idx, inference_groups
 
@@ -153,16 +162,28 @@ if __name__ == "__main__":
 
     # Create input: [text_tokens, soi, image_tokens, eoi, text_tokens]
     # Image tokens numbered 100-115 for easy visualization
-    test_input = torch.tensor([[
-        1, 2, 3,  # prefix text tokens
-        soi_id,  # start of image
-        100, 101, 102, 103,  # first row of image
-        104, 105, 106, 107,  # second row
-        108, 109, 110, 111,  # third row
-        112, 113, 114, 115,  # fourth row
-        eoi_id,  # end of image
-        4, 5, 6  # suffix text tokens
-    ]])
+    test_input = torch.tensor([
+        [
+            1, 2, 3,  # prefix text tokens
+            soi_id,  # start of image
+            100, 101, 102, 103,  # first row of image
+            104, 105, 106, 107,  # second row
+            108, 109, 110, 111,  # third row
+            112, 113, 114, 115,  # fourth row
+            eoi_id,  # end of image
+            4, 5, 6  # suffix text tokens
+        ],
+        [
+            1, 2,  # prefix text tokens
+            soi_id,  # start of image
+            100, 101, 102, 103,  # first row of image
+            104, 105, 106, 107,  # second row
+            108, 109, 110, 111,  # third row
+            112, 113, 114, 115,  # fourth row
+            eoi_id,  # end of image
+            3, 4, 5, 6  # suffix text tokens
+        ]
+    ])
 
     print("\nTest input tensor:")
     print(test_input)
