@@ -435,8 +435,6 @@ def main():
                        config.training.lm_coeff * loss_lm + \
                        config.training.mmu_coeff * loss_mmu
 
-                avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size_t2i)).mean()
-
                 accelerator.backward(loss)
 
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -471,7 +469,6 @@ def main():
                         "step_loss_mmu": avg_loss_mmu.item(),
                         "step_loss_lm": avg_loss_lm.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
-                        "avg_masking_rate": avg_masking_rate.item(),
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,

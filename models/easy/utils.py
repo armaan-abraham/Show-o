@@ -81,7 +81,7 @@ def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "b
     mask = key_groups <= query_groups
     return mask
     
-def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]]:
+def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
     # Assume single image per seq
     batch_size = input_ids.shape[0]
     seq_len = input_ids.shape[1]
@@ -97,18 +97,13 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     soi_idxs = soi_idxs.argmax(dim=1) + 1 # [B]
 
     img_reorder_idx, img_inference_groups = get_index_and_grouping(int(math.sqrt(num_image_tokens)))
-
-    # Reorder image tokens using image token reorder indexes
-    img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone()
-    img_reorder_idx_src = img_reorder_idx + soi_idxs.unsqueeze(1)
+    # Repeat across the batch and add starting index of image for each row
+    img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
     img_idx_ori = torch.arange(num_image_tokens, device=input_ids.device).unsqueeze(0) + soi_idxs.unsqueeze(1)
-
-    batch_indices = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
-    input_ids[batch_indices, img_idx_ori] = input_ids[batch_indices, img_reorder_idx_src]
-
-    # Create full versions of reorder indexes and insert image portion we just used
-    reorder_idx = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
-    reorder_idx[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_reorder_idx_src
+    # Create full versions of reorder indexes and insert image portion we just created
+    reorder_idx_seq = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
+    reorder_idx_seq[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_reorder_idx
+    reorder_idx_batch = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
     inference_groups = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
@@ -128,7 +123,7 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=input_ids.device), post_img_sizes)
     inference_groups[batch_idx, post_img_idxs_by_row] -= (num_image_tokens - num_inference_groups_per_img)
 
-    return reorder_idx, inference_groups
+    return (reorder_idx_batch, reorder_idx_seq), inference_groups
 
 def remove_pads_from_attn_mask(attn_mask: Bool[Tensor, "batch seq seq"], input_ids: Int[Tensor, "batch seq"], pad_id: int) -> Bool[Tensor, "batch seq seq"]:
     # attn_mask: [B, S, S]
@@ -194,17 +189,19 @@ if __name__ == "__main__":
     print("\nTest input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
-    reorder_idx, inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens)
+    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens)
+    test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
     print("\nReordered input tensor:")
-    print(test_input)
-    print(f"Shape: {test_input.shape}")
+    print(test_input_reordered)
+    print(f"Shape: {test_input_reordered.shape}")
     print("\nReorder indexes:")
-    print(reorder_idx)
+    print(reorder_idx_batch)
+    print(reorder_idx_seq)
     print("\ninference groups:")
     print(inference_groups)
     print("\nAttention mask:")
     attn_mask = get_attn_mask(inference_groups).int()
-    attn_mask = remove_pads_from_attn_mask(attn_mask, test_input, pad_id=0).int()
+    attn_mask = remove_pads_from_attn_mask(attn_mask, test_input_reordered, pad_id=0).int()
     for mat in attn_mask:
         print(mat)
 

@@ -211,6 +211,6 @@ class Showo(ModelMixin, ConfigMixin):
                 labels[-batch_size_mmu:, 1:].contiguous().view(-1), ignore_index=-100,
             )
 
-            return logits, loss_t2i, loss_lm, loss_mmu, mask_prob
+            return logits, loss_t2i, loss_lm, loss_mmu
 
         return logits
