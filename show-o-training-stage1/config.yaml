@@ -1,7 +1,7 @@
 wandb:
   entity: null
   resume: auto
-  run_id: uqnux7b2
+  run_id: rh9ryyxh
 experiment:
   project: training
   name: show-o-training-stage2
@@ -19,29 +19,25 @@ model:
   vq_model:
     type: magvitv2
     vq_model_name: showlab/magvitv2
-  showo:
-    load_from_showo: false
-    pretrained_model_path: showlab/show-o
-    w_clip_vit: false
+  text_tokenizer: microsoft/phi-1_5
+  transformer:
     vocab_size: 58498
-    llm_vocab_size: 50295
-    llm_model_path: microsoft/phi-1_5
-    codebook_size: 8192
-    num_vq_tokens: 256
-    num_new_special_tokens: 10
+    max_seq_len: 387
+    num_layers: 2
+    d_model: 64
+    d_mlp: 256
+    num_heads: 4
+    dtype: bf16
   gradient_checkpointing: true
 dataset:
-  gen_type: t2i
+  gen_type: imagenet1k
   und_type: captioning
   combined_loader_mode: max_size_cycle
   params:
-    train_t2i_shards_path_or_url:
-    - https://huggingface.co/datasets/pixparse/cc12m-wds/resolve/main/cc12m-train-{0000..2175}.tar
-    - https://huggingface.co/datasets/laion/conceptual-captions-12m-webdataset/resolve/main/data/{00000..01099}.tar
+    train_t2i_shards_path_or_url: /iris/u/armaana/datasets/ILSVRC2012_img_train
     train_mmu_shards_path_or_url:
-    - https://huggingface.co/datasets/pixparse/cc12m-wds/resolve/main/cc12m-train-{0000..2175}.tar
-    - https://huggingface.co/datasets/laion/conceptual-captions-12m-webdataset/resolve/main/data/{00000..01099}.tar
-    train_lm_shards_path_or_url: hf://allenai/c4/en/train
+    - /iris/u/armaana/datasets/cc12m/cc12m-train-{0000..2175}.tar
+    train_lm_shards_path_or_url: /iris/u/armaana/datasets/c4/en
     add_caption_prompt: true
     external_caption_path: ''
     external_journeydb_caption_path: ''
@@ -49,7 +45,7 @@ dataset:
     external_cc12m_caption_path: ''
     validation_prompts_file: validation_prompts/text2image_prompts.txt
     shuffle_buffer_size: 1000
-    num_workers: 2
+    num_workers: 8
     resolution: 256
     pin_memory: true
     persistent_workers: true

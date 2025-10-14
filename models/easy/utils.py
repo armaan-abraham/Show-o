@@ -75,14 +75,13 @@ def get_input_output_interface_mask(inference_groups: Int[Tensor, "token"]) -> B
     groups_j = inference_groups.unsqueeze(0)
     return (groups_i == groups_j + 1)
 
-def get_attn_mask(inference_groups: Int[Tensor, "token"]):
-    query_groups = inference_groups.unsqueeze(1)
-    key_groups = inference_groups.unsqueeze(0)
-    
+def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "batch seq seq"]:
+    query_groups = inference_groups.unsqueeze(2)
+    key_groups = inference_groups.unsqueeze(1)
     mask = key_groups <= query_groups
     return mask
     
-def reorder_and_group(input_ids, soi_id, eoi_id, num_image_tokens):
+def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]]:
     # Assume single image per seq
     batch_size = input_ids.shape[0]
     seq_len = input_ids.shape[1]
@@ -121,7 +120,7 @@ def reorder_and_group(input_ids, soi_id, eoi_id, num_image_tokens):
     post_img_sizes = seq_len - (soi_idxs + num_image_tokens)
     max_size = post_img_sizes.max()
     # Make a grid [0..max_len-1] per row, then mask by each row's length
-    shared_seq = torch.arange(max_size)
+    shared_seq = torch.arange(max_size, device=input_ids.device)
     grid = repeat(shared_seq, "len -> batch len", batch=batch_size).clone() + soi_idxs.unsqueeze(1) + num_image_tokens
     mask = shared_seq.unsqueeze(0) < post_img_sizes.unsqueeze(1)   # [num_rows, max_len] boolean
     post_img_idxs_by_row = grid[mask]
@@ -130,6 +129,13 @@ def reorder_and_group(input_ids, soi_id, eoi_id, num_image_tokens):
     inference_groups[batch_idx, post_img_idxs_by_row] -= (num_image_tokens - num_inference_groups_per_img)
 
     return reorder_idx, inference_groups
+
+def remove_pads_from_attn_mask(attn_mask: Bool[Tensor, "batch seq seq"], input_ids: Int[Tensor, "batch seq"], pad_id: int) -> Bool[Tensor, "batch seq seq"]:
+    # attn_mask: [B, S, S]
+    # input_ids: [B, S]
+    pad_mask = (input_ids != pad_id)  # [B, S]
+    attn_mask = attn_mask & pad_mask.unsqueeze(1) & pad_mask.unsqueeze(2)
+    return attn_mask
 
 if __name__ == "__main__":
     print("Starting")
@@ -151,7 +157,7 @@ if __name__ == "__main__":
     print("Input-output interface mask")
     print(get_input_output_interface_mask(grouping).int())
     print("Attention mask")
-    print(get_attn_mask(grouping).int())
+    print(get_attn_mask(grouping.unsqueeze(0)).int())
 
     # Simple test input for reorder_and_group with image size 4
     # Image size 4 means 4x4 = 16 image tokens
@@ -164,7 +170,7 @@ if __name__ == "__main__":
     # Image tokens numbered 100-115 for easy visualization
     test_input = torch.tensor([
         [
-            1, 2, 3,  # prefix text tokens
+            0, 0, 3,  # prefix text tokens
             soi_id,  # start of image
             100, 101, 102, 103,  # first row of image
             104, 105, 106, 107,  # second row
@@ -181,14 +187,14 @@ if __name__ == "__main__":
             108, 109, 110, 111,  # third row
             112, 113, 114, 115,  # fourth row
             eoi_id,  # end of image
-            3, 4, 5, 6  # suffix text tokens
+            3, 0, 0, 0  # suffix text tokens
         ]
     ])
 
     print("\nTest input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
-    reorder_idx, inference_groups = reorder_and_group(test_input, soi_id, eoi_id, num_image_tokens)
+    reorder_idx, inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens)
     print("\nReordered input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
@@ -196,6 +202,11 @@ if __name__ == "__main__":
     print(reorder_idx)
     print("\ninference groups:")
     print(inference_groups)
+    print("\nAttention mask:")
+    attn_mask = get_attn_mask(inference_groups).int()
+    attn_mask = remove_pads_from_attn_mask(attn_mask, test_input, pad_id=0).int()
+    for mat in attn_mask:
+        print(mat)
 
 
 
