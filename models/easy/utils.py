@@ -70,9 +70,9 @@ def get_index_and_grouping(dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, 
             
     return torch.tensor(indexes), torch.tensor(grouping)
 
-def get_input_output_interface_mask(inference_groups: Int[Tensor, "token"]) -> Bool[Tensor, "token token"]:
-    groups_i = inference_groups.unsqueeze(1)
-    groups_j = inference_groups.unsqueeze(0)
+def get_io_interface_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "batch seq seq"]:
+    groups_i = inference_groups.unsqueeze(2)
+    groups_j = inference_groups.unsqueeze(1)
     return (groups_i == groups_j + 1)
 
 def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "batch seq seq"]:
@@ -82,45 +82,57 @@ def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "b
     return mask
     
 def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
+    assert input_ids.dim() == 2
     # Assume single image per seq
     batch_size = input_ids.shape[0]
     seq_len = input_ids.shape[1]
+    device = input_ids.device
 
     # Compute number of image tokens from first row by counting tokens between soi and eoi
     first_row = input_ids[0]
     soi_idx = (first_row == soi_id).nonzero(as_tuple=True)[0][0].item()
     eoi_idx = (first_row == eoi_id).nonzero(as_tuple=True)[0][0].item()
     assert(eoi_idx - soi_idx - 1 == num_image_tokens)
+    print(f"Input ids first row: {first_row[:20]}")
 
     soi_idxs = (input_ids == soi_id).long()
     assert torch.all(reduce(soi_idxs, "batch seq -> batch", "sum") == 1), "More than one soi token in a sequence"
     soi_idxs = soi_idxs.argmax(dim=1) + 1 # [B]
+    print(f"Soi index: {soi_idxs[0]}")
 
     img_reorder_idx, img_inference_groups = get_index_and_grouping(int(math.sqrt(num_image_tokens)))
+    img_reorder_idx = img_reorder_idx.to(device)
+    img_inference_groups = img_inference_groups.to(device)
     # Repeat across the batch and add starting index of image for each row
     img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
-    img_idx_ori = torch.arange(num_image_tokens, device=input_ids.device).unsqueeze(0) + soi_idxs.unsqueeze(1)
+    img_idx_ori = torch.arange(num_image_tokens, device=device).unsqueeze(0) + soi_idxs.unsqueeze(1)
+    print(f"Image original indexes (first row): {img_idx_ori[0, :20]}")
+    print(f"Image reorder indexes (first row): {img_reorder_idx[0, :20]}")
     # Create full versions of reorder indexes and insert image portion we just created
-    reorder_idx_seq = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
-    reorder_idx_seq[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_reorder_idx
-    reorder_idx_batch = torch.arange(batch_size, device=input_ids.device).unsqueeze(1)
+    reorder_idx_seq = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
+    reorder_idx_seq[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_reorder_idx
+    print(f"Full reorder indexes (first row): {reorder_idx_seq[0, :20]}")
+    reorder_idx_batch = torch.arange(batch_size, device=device).unsqueeze(1)
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
-    inference_groups = repeat(torch.arange(seq_len, device=input_ids.device), "seq -> batch seq", batch=batch_size).clone()
+    inference_groups = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
     num_inference_groups_per_img = img_inference_groups[-1]
     img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
-    inference_groups[torch.arange(batch_size, device=input_ids.device).unsqueeze(1), img_idx_ori] = img_inference_groups
+    print(f"Image inference groups (first row): {img_inference_groups[0, :20]}")
+    inference_groups[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_inference_groups
+    print(f"Full inference groups (first row): {inference_groups[0, :20]}")
 
     # Update the inference groups after the image to start after last image inference group
     post_img_sizes = seq_len - (soi_idxs + num_image_tokens)
     max_size = post_img_sizes.max()
-    # Make a grid [0..max_len-1] per row, then mask by each row's length
-    shared_seq = torch.arange(max_size, device=input_ids.device)
+    shared_seq = torch.arange(max_size, device=device)
     grid = repeat(shared_seq, "len -> batch len", batch=batch_size).clone() + soi_idxs.unsqueeze(1) + num_image_tokens
+    # Create a boolean mask to select the number of tokens after the image for
+    # each row
     mask = shared_seq.unsqueeze(0) < post_img_sizes.unsqueeze(1)   # [num_rows, max_len] boolean
     post_img_idxs_by_row = grid[mask]
 
-    batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=input_ids.device), post_img_sizes)
+    batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=device), post_img_sizes)
     inference_groups[batch_idx, post_img_idxs_by_row] -= (num_image_tokens - num_inference_groups_per_img)
 
     return (reorder_idx_batch, reorder_idx_seq), inference_groups
@@ -150,7 +162,7 @@ if __name__ == "__main__":
     print(grouping)
     # print(create_image_token_ordering(16))
     print("Input-output interface mask")
-    print(get_input_output_interface_mask(grouping).int())
+    print(get_io_interface_mask(grouping.unsqueeze(0)).int())
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
 
@@ -163,26 +175,27 @@ if __name__ == "__main__":
 
     # Create input: [text_tokens, soi, image_tokens, eoi, text_tokens]
     # Image tokens numbered 100-115 for easy visualization
+    batch_size = 2
     test_input = torch.tensor([
         [
-            0, 0, 3,  # prefix text tokens
+            0, 0, 3,
             soi_id,  # start of image
             100, 101, 102, 103,  # first row of image
             104, 105, 106, 107,  # second row
             108, 109, 110, 111,  # third row
             112, 113, 114, 115,  # fourth row
             eoi_id,  # end of image
-            4, 5, 6  # suffix text tokens
+            4, 5, 6 
         ],
         [
-            1, 2,  # prefix text tokens
+            1, 2,
             soi_id,  # start of image
             100, 101, 102, 103,  # first row of image
             104, 105, 106, 107,  # second row
             108, 109, 110, 111,  # third row
             112, 113, 114, 115,  # fourth row
             eoi_id,  # end of image
-            3, 0, 0, 0  # suffix text tokens
+            3, 0, 0, 0
         ]
     ])
 
@@ -201,10 +214,15 @@ if __name__ == "__main__":
     print(inference_groups)
     print("\nAttention mask:")
     attn_mask = get_attn_mask(inference_groups).int()
-    attn_mask = remove_pads_from_attn_mask(attn_mask, test_input_reordered, pad_id=0).int()
+    pad_id = 0
+    attn_mask = remove_pads_from_attn_mask(attn_mask, test_input_reordered, pad_id=pad_id).int()
     for mat in attn_mask:
         print(mat)
 
+    nonpad_first = (test_input_reordered != pad_id).int().argmax(dim=1)
+    # Get inference groups for each first token.
+    first_inference_groups = inference_groups[torch.arange(batch_size), nonpad_first]
+    print(first_inference_groups)
 
 
 

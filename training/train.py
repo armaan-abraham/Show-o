@@ -43,8 +43,8 @@ from training.c4_dataset import C4Dataset
 # from parquet import RefinedWebDataset
 
 from models import Showo, MAGVITv2, get_mask_chedule
-from training.prompting_utils import UniversalPrompting, create_attention_mask_predict_next, \
-    create_attention_mask_for_mmu
+from models.easy import EasyTransformer
+from training.prompting_utils import UniversalPrompting
 from models.lr_schedulers import get_scheduler
 from models.logging import set_verbosity_info, set_verbosity_error
 
@@ -186,9 +186,19 @@ def main():
     vq_model.eval()
     vq_model.requires_grad_(False)
 
-    # Initialize Show-o model
-    model = Showo(accelerator=accelerator, **config.model.transformer).to(accelerator.device)
-    mask_id = model.mask_token_id
+    # Initialize model
+    if "easy_transformer" in config.model:
+        model = EasyTransformer(
+            accelerator=accelerator, 
+            **config.model.easy_transformer
+        ).to(accelerator.device)
+        ignore_prefix_tokens = False
+    else:
+        assert "showo" in config.model
+        model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
+        ignore_prefix_tokens = True
+
+    mask_id = model.config.mask_token_id
 
     ##################################
     #   Optimizer and LR scheduler   #
@@ -247,13 +257,8 @@ def main():
             config.training.batch_size_t2i * accelerator.num_processes * config.training.gradient_accumulation_steps
     )
 
-    # DataLoaders creation:
-    # We use webdataset for data loading. The dataloaders are created with sampling with replacement.
-    # We don't do dataset resuming here, instead we resample the shards and buffer each time. The sampling is stochastic.
-    # This means that the dataloading is not deterministic, but it's fast and efficient.
     preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
-
 
     assert config.dataset.gen_type == "imagenet1k"
     dataset_imagenet = ImageNetDataset(
@@ -277,8 +282,9 @@ def main():
                                     shuffle=shuffle, num_workers=dataset_config.num_workers)
     num_update_steps_per_epoch = math.ceil(len(dataset_imagenet) / total_batch_size_t2i)
     num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
+    logger.info("Done t2i loader")
 
-    # Data for image captioning
+    # Data for mmu
     assert config.dataset.und_type == "captioning"
     dataset_mmu = Text2ImageDataset(
         train_shards_path_or_url=dataset_config.train_mmu_shards_path_or_url,
@@ -295,6 +301,7 @@ def main():
         add_caption_prompt=dataset_config.add_caption_prompt,
     )
     train_dataloader_mmu = dataset_mmu.train_dataloader
+    logger.info("Done mmu loader")
 
     # Assert that a path is provided for language modeling data
     assert dataset_config.train_lm_shards_path_or_url, "train_lm_shards_path_or_url must be provided"
@@ -306,6 +313,7 @@ def main():
         collate_fn=dataset_lm.collate_fn,
         num_workers=dataset_config.num_workers
     )
+    logger.info("Done lm loader")
 
     # Combine these dataloaders into a single iterable model
     iterables = {
@@ -363,6 +371,7 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch, batch_idx, dataloader_idx in combined_dataloader:
+            print("Batch idx:", batch_idx)
 
             # Debug logging - save images and text info for first iteration on main process
             if global_step == 0 and accelerator.is_main_process:
@@ -384,13 +393,13 @@ def main():
                 # Encode images to image tokens and create input and labels
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
-                input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i')
+                input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i', ignore_prefix_tokens=ignore_prefix_tokens)
 
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 # Build formatted sequences for language modeling
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 texts_lm = batch["lm_flow"]["input_ids"]
-                input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm')
+                input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm', ignore_prefix_tokens=ignore_prefix_tokens)
                 input_ids = torch.cat((input_ids, input_ids_lm.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_lm.to(input_ids.device)), dim=0)
 
@@ -401,17 +410,16 @@ def main():
                 pixel_values_mmu = pixel_values_mmu.to(accelerator.device, non_blocking=True)
                 image_tokens_mmu = vq_model.get_code(pixel_values_mmu)
                 image_tokens_mmu = image_tokens_mmu + len(uni_prompting.text_tokenizer)
-                input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu')
+                input_ids_mmu, _, labels_mmu = uni_prompting((image_tokens_mmu, texts_mmu), 'mmu', ignore_prefix_tokens=ignore_prefix_tokens)
                 input_ids_mmu = input_ids_mmu.to(accelerator.device, non_blocking=True)
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
-                assert input_ids.shape[0] < config.model.transformer.vocab_size
+                assert input_ids.shape[1] <= model.config.max_seq_len
 
             with accelerator.accumulate(model):
-                logits, loss_t2i, loss_lm, loss_mmu, mask_prob = model(
+                logits, loss_t2i, loss_lm, loss_mmu = model(
                     input_ids=input_ids,
-                    input_embeddings=None,
                     labels=labels,
                     label_smoothing=config.training.label_smoothing,
                     batch_size_t2i=batch_size_t2i,
@@ -422,7 +430,6 @@ def main():
                     pad_id=int(uni_prompting.sptids_dict['<|pad|>']),
                     soi_id=int(uni_prompting.sptids_dict['<|soi|>']),
                     eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
-                    config=config,
                     mask_schedule=mask_schedule,
                     ignore_id=uni_prompting.ignore_id,
                 )

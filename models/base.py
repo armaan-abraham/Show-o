@@ -30,10 +30,15 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: Float[Tensor, "batch seq d_model"],
-        attention_mask: Bool[Tensor, "batch head seq seq"],
+        attn_mask: Bool[Tensor, "batch seq seq"],
     ) -> Float[Tensor, "batch seq d_model"]:
+        """
+        True in the attention mask means attend, False means don't attend.
+        """
         x_ln1 = self.ln1(x)
-        x = x + self.attn(x_ln1, x_ln1, x_ln1, attn_mask=rearrange(repeat(attention_mask, "batch 1 seq_q seq_k -> batch head seq_q seq_k", head=self.num_heads), "batch head seq_q seq_k -> (batch head) seq_q seq_k"), need_weights=False)[0]
+        # Multi head attention expects true to mean don't attend, false to mean
+        # attend, so we invert the mask here.
+        x = x + self.attn(x_ln1, x_ln1, x_ln1, attn_mask=rearrange(repeat(~attn_mask, "batch seq_q seq_k -> batch head seq_q seq_k", head=self.num_heads), "batch head seq_q seq_k -> (batch head) seq_q seq_k"), need_weights=False)[0]
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -58,7 +63,10 @@ class Transformer(nn.Module):
         self.blocks = nn.ModuleList([TransformerBlock(d_model=d_model, d_mlp=d_mlp, num_heads=num_heads) for _ in range(num_layers)])
         self.unembed = nn.Linear(d_model, vocab_size)
 
-    def forward(self, input_ids: Int[Tensor, "batch seq"], attention_mask: Bool[Tensor, "batch head seq seq"]=None) -> Float[Tensor, "batch seq vocab"]:
+    def forward(self, input_ids: Int[Tensor, "batch seq"], attn_mask: Bool[Tensor, "batch seq seq"]=None) -> Float[Tensor, "batch seq vocab"]:
+        """
+        True in the attention mask means attend, False means don't attend.
+        """
         with torch.autocast(device_type=input_ids.device.type, dtype=self.dtype):
             batch_size, seq_len = input_ids.shape
 
@@ -70,7 +78,7 @@ class Transformer(nn.Module):
 
             # Flow through transformer blocks
             for block in self.blocks:
-                resid = block(resid, attention_mask)
+                resid = block(resid, attn_mask)
 
             assert resid.shape == (batch_size, seq_len, self.d_model)
 

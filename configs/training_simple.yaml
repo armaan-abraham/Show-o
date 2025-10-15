@@ -23,19 +23,20 @@ model:
     
     text_tokenizer: "microsoft/phi-1_5"
 
-    transformer:
+    easy_transformer:
         vocab_size: 58498
         max_seq_len: 387
+        
+        image_len: 256
 
-        num_layers: 2
+        num_layers_input: 1
+        num_layers_output: 1
         d_model: 64
         d_mlp: 256
 
-        num_heads: 4
+        num_heads: 2
 
         dtype: bf16
-
-
 
     gradient_checkpointing: True
 
@@ -95,7 +96,7 @@ training:
     cond_dropout_prob: 0.1
     min_masking_rate: 0.0
     label_smoothing: 0.0
-    max_grad_norm: null
+    max_grad_norm: 0.5
     guidance_scale: 0.0
     generation_timesteps: 12
     t2i_coeff: 1.0
