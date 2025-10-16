@@ -138,44 +138,14 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             assert attn_result.shape == (batch_size, seq_len, self.config.d_model)
 
-            monoinput_inference_groups = (reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q", "sum") == 1).unsqueeze(-1)
-
             # The first inference group has no corresponding input for its
             # output, so we just set the initial output residual stream to the
             # output positional embedding.
-            resid = torch.where(
-                (inference_groups == first_inference_groups.unsqueeze(1)).unsqueeze(-1) | monoinput_inference_groups, 
-                output_resid,
-                output_resid + attn_result,
-            )
-
-            # resid = output_resid + attn_result
-
-            is_finite = torch.isfinite(resid)
-            all_valid = torch.all(is_finite)
-            if not all_valid:
-                print("non-finite values after io blocks at positions:")
-                problematic = ~is_finite
-                positions = torch.nonzero(problematic)
-                unique_positions = torch.unique(positions[:, :2], dim=0)
-                print(unique_positions[:5])
-                print("...")
-            assert all_valid, "found non-finite values in non-masked positions"
+            resid = output_resid + attn_result
 
             # Now continue with remaining blocks like a typical transformer
             for output_block in self.output_blocks:
                 resid = output_block(resid, attn_mask=attn_mask)
-
-            is_finite = torch.isfinite(resid)
-            is_masked = (input_ids_reordered == 50295).unsqueeze(-1)
-            all_valid = torch.all(is_finite | is_masked)
-            if not all_valid:
-                print("non-finite values in output blocks at positions:")
-                problematic = (~is_finite) & (~is_masked)
-                positions = torch.nonzero(problematic)
-                unique_positions = torch.unique(positions[:, :2], dim=0)
-                print(unique_positions)
-            assert all_valid, "found non-finite values in non-masked positions"
 
             resid_noq_zero = torch.where(
                 reduce(attn_mask, "batch seq_q seq_k -> batch seq_q 1", "sum") > 0,
@@ -203,10 +173,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         **kwargs,
     ):
         torch.autograd.set_detect_anomaly(True)
-        print("batch sizes:", batch_size_t2i, batch_size_lm, batch_size_mmu)
-        print("pad id", pad_id)
-        print("ignore id", ignore_id)
-        print("soi id", soi_id)
         with torch.no_grad():
             device = input_ids.device
             batch_size = input_ids.shape[0]
