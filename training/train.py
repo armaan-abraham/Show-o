@@ -471,6 +471,9 @@ def main():
                     samples_per_second_per_gpu = (
                             config.training.gradient_accumulation_steps * total_batch_size_per_gpu / batch_time_m.val
                     )
+                    # Calculate average fraction of ignore tokens per row
+                    avg_ignore_fraction_per_seq = (labels == uni_prompting.ignore_id).float().mean(dim=1).mean().item()
+
                     logs = {
                         "step_loss_t2i": avg_loss_t2i.item(),
                         "step_loss_mmu": avg_loss_mmu.item(),
@@ -479,6 +482,7 @@ def main():
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
+                        "avg_ignore_fraction_per_seq": avg_ignore_fraction_per_seq,
                     }
                     accelerator.log(logs, step=global_step + 1)
 
