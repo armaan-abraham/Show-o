@@ -1,7 +1,7 @@
-from typing import Tuple, List
+from typing import Tuple, List, Union
 import torch
 from torch import Tensor
-from jaxtyping import Int, Bool
+from jaxtyping import Int, Bool, Float
 import math
 from einops import reduce, repeat
 
@@ -81,7 +81,7 @@ def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "b
     mask = key_groups <= query_groups
     return mask
     
-def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
+def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Tuple[Int[Tensor, "batch 1"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
     assert input_ids.dim() == 2
     # Assume single image per seq
     batch_size = input_ids.shape[0]
@@ -136,6 +136,12 @@ def remove_pads_from_attn_mask(attn_mask: Bool[Tensor, "batch seq seq"], input_i
     pad_mask = (input_ids != pad_id)  # [B, S]
     attn_mask = attn_mask & pad_mask.unsqueeze(1) & pad_mask.unsqueeze(2)
     return attn_mask
+
+
+def reset_to_ori_order(predictions: Union[Float[Tensor, "batch seq vocab"], Int[Tensor, "batch seq"]], reorder_idx_batch: Int[Tensor, "batch 1"], reorder_idx_seq: Int[Tensor, "batch seq"]) -> Union[Float[Tensor, "batch seq vocab"], Int[Tensor, "batch seq"]]:
+    result = torch.zeros_like(predictions)
+    result[reorder_idx_batch, reorder_idx_seq] = predictions
+    return result
 
 if __name__ == "__main__":
     print("Starting")
@@ -199,6 +205,9 @@ if __name__ == "__main__":
     test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
     print("\nReordered input tensor:")
     print(test_input_reordered)
+    test_input_ori_order = reset_to_ori_order(test_input_reordered, reorder_idx_batch, reorder_idx_seq)
+    print("\nOriginal order")
+    print(test_input_ori_order)
     print(f"Shape: {test_input_reordered.shape}")
     print("\nReorder indexes:")
     print(reorder_idx_batch)

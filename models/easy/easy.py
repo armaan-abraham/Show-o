@@ -11,6 +11,7 @@ from .utils import (
     reorder_and_group_token_batch,
     remove_pads_from_attn_mask,
     get_attn_mask,
+    reset_to_ori_order,
 )
 from einops import repeat, rearrange, reduce, einsum
 from jaxtyping import Float, Int, Bool
@@ -153,6 +154,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         labels: Int[Tensor, "batch seq"] = None,
         global_step: int = None,
         label_smoothing: float = 0.0,
+        keep_prediction_order: bool = False,
         **kwargs,
     ):
         torch.autograd.set_detect_anomaly(True)
@@ -247,6 +249,10 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         # Assert no nans
         assert torch.all(torch.isfinite(logits)), "Logits contain NaNs or Infs"
 
+        result = [
+            logits if keep_prediction_order else reset_to_ori_order(logits, reorder_idx_batch, reorder_idx_seq)
+        ]
+
         if labels is not None:
             assert labels.shape == input_ids.shape
             # Only padding should be ignored
@@ -293,6 +299,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             )
             assert(not torch.isnan(loss_mmu) and not torch.isinf(loss_mmu))
 
-            return logits, loss_t2i, loss_lm, loss_mmu
+            result += [loss_t2i, loss_lm, loss_mmu]
 
-        return logits
+        return tuple(result)
