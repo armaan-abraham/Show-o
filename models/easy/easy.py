@@ -138,7 +138,18 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             assert attn_result.shape == (batch_size, seq_len, self.config.d_model)
 
-            resid = output_resid + attn_result
+            monoinput_inference_groups = (reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q", "sum") == 1).unsqueeze(-1)
+
+            # The first inference group has no corresponding input for its
+            # output, so we just set the initial output residual stream to the
+            # output positional embedding.
+            resid = torch.where(
+                (inference_groups == first_inference_groups.unsqueeze(1)).unsqueeze(-1) | monoinput_inference_groups, 
+                output_resid,
+                output_resid + attn_result,
+            )
+
+            # resid = output_resid + attn_result
 
             is_finite = torch.isfinite(resid)
             all_valid = torch.all(is_finite)
@@ -264,14 +275,14 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             # Construct attention mask from inference groups
             attn_mask = get_attn_mask(inference_groups).to(device)
-            attn_mask = remove_pads_from_attn_mask(attn_mask, input_ids_reordered, pad_id)
+            # attn_mask = remove_pads_from_attn_mask(attn_mask, input_ids_reordered, pad_id)
             assert attn_mask.shape == (batch_size, seq_len, seq_len)
             assert attn_mask.dtype == torch.bool
 
             # Get input output interface mask, which is a sparse attention mask for
             # passing residuals from last input block to first output block
             io_interface_mask = get_io_interface_mask(inference_groups)
-            io_interface_mask = remove_pads_from_attn_mask(io_interface_mask, input_ids_reordered, pad_id)
+            # io_interface_mask = remove_pads_from_attn_mask(io_interface_mask, input_ids_reordered, pad_id)
             assert io_interface_mask.shape == (batch_size, seq_len, seq_len)
 
             # Construct mask designating where inferences start in each batch.
@@ -283,10 +294,10 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             first_inference_groups = inference_groups[torch.arange(batch_size, device=device), nonpad_first]
 
             # Assert that no token attends to pad token
-            assert torch.all(~((reduce(attn_mask, "batch seq_q seq_k -> batch seq_k", "sum") > 0) & (input_ids_reordered == pad_id)))
+            # assert torch.all(~((reduce(attn_mask, "batch seq_q seq_k -> batch seq_k", "sum") > 0) & (input_ids_reordered == pad_id)))
 
             # Assert that the only query rows in the attention mask with no entries are pad tokens
-            assert torch.all((reduce(attn_mask, "batch seq_q seq_k -> batch seq_q", "sum") > 0) | (input_ids_reordered == pad_id))
+            # assert torch.all((reduce(attn_mask, "batch seq_q seq_k -> batch seq_q", "sum") > 0) | (input_ids_reordered == pad_id))
 
         logits = self._forward(
             input_ids_reordered, reorder_idx_seq, attn_mask, io_interface_mask, inference_groups, first_inference_groups

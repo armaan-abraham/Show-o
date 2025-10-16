@@ -355,6 +355,29 @@ def main():
 
     vq_model.to(device=accelerator.device)
 
+    # ##################################
+    # #     Register Backward Hooks   #
+    # ##################################
+    # def backward_hook(module, grad_input, grad_output):
+    #     """Detect NaN/Inf in gradients during backward pass"""
+    #     module_name = module.__class__.__name__
+    #     for idx, grad in enumerate(grad_output):
+    #         if grad is not None:
+    #             has_nan = torch.isnan(grad).any()
+    #             has_inf = torch.isinf(grad).any()
+    #             if has_nan or has_inf:
+    #                 logger.info(f"NaN/Inf detected in {module_name} grad_output[{idx}]")
+    #                 logger.info(f"  NaN: {has_nan}, Inf: {has_inf}")
+    #                 logger.info(f"  Shape: {grad.shape}")
+    #                 if not has_nan:
+    #                     logger.info(f"  Mean: {grad.mean()}, Max: {grad.abs().max()}")
+
+    # # Register backward hooks on all modules
+    # for name, module in model.named_modules():
+    #     module.register_full_backward_hook(backward_hook)
+
+    # logger.info("Registered backward hooks for NaN/Inf detection")
+
     ##################################
     #             Training          #
     #################################
