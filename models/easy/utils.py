@@ -93,12 +93,10 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     soi_idx = (first_row == soi_id).nonzero(as_tuple=True)[0][0].item()
     eoi_idx = (first_row == eoi_id).nonzero(as_tuple=True)[0][0].item()
     assert(eoi_idx - soi_idx - 1 == num_image_tokens)
-    print(f"Input ids first row: {first_row[:20]}")
 
     soi_idxs = (input_ids == soi_id).long()
     assert torch.all(reduce(soi_idxs, "batch seq -> batch", "sum") == 1), "More than one soi token in a sequence"
     soi_idxs = soi_idxs.argmax(dim=1) + 1 # [B]
-    print(f"Soi index: {soi_idxs[0]}")
 
     img_reorder_idx, img_inference_groups = get_index_and_grouping(int(math.sqrt(num_image_tokens)))
     img_reorder_idx = img_reorder_idx.to(device)
@@ -106,21 +104,16 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     # Repeat across the batch and add starting index of image for each row
     img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
     img_idx_ori = torch.arange(num_image_tokens, device=device).unsqueeze(0) + soi_idxs.unsqueeze(1)
-    print(f"Image original indexes (first row): {img_idx_ori[0, :20]}")
-    print(f"Image reorder indexes (first row): {img_reorder_idx[0, :20]}")
     # Create full versions of reorder indexes and insert image portion we just created
     reorder_idx_seq = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
     reorder_idx_seq[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_reorder_idx
-    print(f"Full reorder indexes (first row): {reorder_idx_seq[0, :20]}")
     reorder_idx_batch = torch.arange(batch_size, device=device).unsqueeze(1)
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
     inference_groups = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
     num_inference_groups_per_img = img_inference_groups[-1]
     img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
-    print(f"Image inference groups (first row): {img_inference_groups[0, :20]}")
     inference_groups[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_inference_groups
-    print(f"Full inference groups (first row): {inference_groups[0, :20]}")
 
     # Update the inference groups after the image to start after last image inference group
     post_img_sizes = seq_len - (soi_idxs + num_image_tokens)

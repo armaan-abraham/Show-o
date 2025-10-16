@@ -72,14 +72,11 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         attn_mask: Bool[Tensor, "batch seq seq"],
         io_interface_mask: Bool[Tensor, "batch seq seq"],
         inference_groups: Int[Tensor, "batch seq"],
-        first_inference_groups: Int[Tensor, "batch"],
     ) -> Float[Tensor, "batch seq vocab"]:
-        input_ids_reordered = input_ids_reordered.clone()
-
+        input_ids_reordered = input_ids_reordered.contiguous()
         batch_size, seq_len = input_ids_reordered.shape
 
-        with torch.autocast(dtype=torch.float32, device_type=input_ids_reordered.device.type):
-
+        with torch.autocast(dtype=self.dtype_torch, device_type=input_ids_reordered.device.type):
             resid = self.tok_embed(input_ids_reordered) + self.input_pos_embed(
                 reorder_idx_seq
             )
@@ -96,64 +93,50 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             assert output_resid.shape == (batch_size, seq_len, self.config.d_model)
             assert resid.shape == output_resid.shape
 
-            # For Q rows in attn mask that are all false, the residuals will be
-            # nan. For this operation, we use a modified version of the
-            # residuals that are zeroed out at those positions.
-            resid_noq_zero = torch.where(
-                reduce(attn_mask, "batch seq_q seq_k -> batch seq_q 1", "sum") > 0,
-                resid,
-                0.0,
-            )
-            assert torch.all(torch.isfinite(resid_noq_zero)), resid_noq_zero
-
             # Compute full attention weight matrix with initial output residual
             # streams as Q and final input residual streams (transformed) as K.
             attn_weights = einsum(
                 output_resid, # Q
-                self.input_k_transform(resid_noq_zero), # K
+                self.input_k_transform(resid), # K
                 "batch seq_q d_model, batch seq_k d_model -> batch seq_q seq_k"
             ) / seq_len ** 0.5 # scaling factor
 
             # Apply our attention mask
-            attn_weights.masked_fill_(~io_interface_mask, 1e-5)
+            attn_weights = torch.where(
+                # Leave attention weights in rows without any query positions in
+                # attention mask unchanged so we don't get NaNs in softmax. This
+                # is okay because we also set the attention weights for mask=0 to
+                # zero after the softmax.
+                io_interface_mask | ~reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q 1", "sum").bool(),
+                attn_weights,
+                float("-inf"),
+            )
 
-            # Only compute softmax over rows that have at least one entry in Q
-            valid = repeat(reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q", "sum") > 0, "batch seq_q -> batch seq_q seq_k", seq_k=seq_len)
-            attn_probs = torch.zeros_like(attn_weights, dtype=attn_weights.dtype)
-            attn_probs[valid] = torch.softmax(attn_weights[valid], dim=-1).to(attn_weights.dtype)
-            attn_probs[~valid] = 0.0
-            attn_probs = torch.where(
+            attn_weights = torch.softmax(attn_weights, dim=-1)
+
+            attn_weights = torch.where(
                 io_interface_mask,
-                attn_probs,
+                attn_weights,
                 0.0,
             )
 
-            assert torch.all(torch.isfinite(attn_probs))
+            assert torch.all(torch.isfinite(attn_weights))
 
             attn_result = einsum(
-                attn_probs, # QK
-                resid_noq_zero, # V
+                attn_weights, # QK
+                resid, # V
                 "batch seq_q seq_k, batch seq_k d_model -> batch seq_q d_model"
             )
 
             assert attn_result.shape == (batch_size, seq_len, self.config.d_model)
 
-            # The first inference group has no corresponding input for its
-            # output, so we just set the initial output residual stream to the
-            # output positional embedding.
             resid = output_resid + attn_result
 
             # Now continue with remaining blocks like a typical transformer
             for output_block in self.output_blocks:
                 resid = output_block(resid, attn_mask=attn_mask)
 
-            resid_noq_zero = torch.where(
-                reduce(attn_mask, "batch seq_q seq_k -> batch seq_q 1", "sum") > 0,
-                resid,
-                0.0,
-            )
-
-            logits = self.unembed(resid_noq_zero)
+            logits = self.unembed(resid)
 
         return logits
 
@@ -223,8 +206,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             assert reorder_idx_seq.shape == (batch_size, seq_len)
             assert torch.unique(reorder_idx_batch).shape == (batch_size,)
             assert reorder_idx_batch[0][0] == 0
-            print(f"Reorder idx batch (batch 0): {reorder_idx_batch[0]}")
-            print(f"First 20 reorder idx seq (batch 0): {reorder_idx_seq[0, :20]}")
 
             # Combine inference groups
             inference_groups = torch.cat(
@@ -241,14 +222,14 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             # Construct attention mask from inference groups
             attn_mask = get_attn_mask(inference_groups).to(device)
-            # attn_mask = remove_pads_from_attn_mask(attn_mask, input_ids_reordered, pad_id)
+            # Note that we don't zero out the pad tokens, because it causes
+            # MultiHeadAttention to produces NaNs
             assert attn_mask.shape == (batch_size, seq_len, seq_len)
             assert attn_mask.dtype == torch.bool
 
             # Get input output interface mask, which is a sparse attention mask for
             # passing residuals from last input block to first output block
             io_interface_mask = get_io_interface_mask(inference_groups)
-            # io_interface_mask = remove_pads_from_attn_mask(io_interface_mask, input_ids_reordered, pad_id)
             assert io_interface_mask.shape == (batch_size, seq_len, seq_len)
 
             # Construct mask designating where inferences start in each batch.
@@ -259,14 +240,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             # Get inference groups for each first token.
             first_inference_groups = inference_groups[torch.arange(batch_size, device=device), nonpad_first]
 
-            # Assert that no token attends to pad token
-            # assert torch.all(~((reduce(attn_mask, "batch seq_q seq_k -> batch seq_k", "sum") > 0) & (input_ids_reordered == pad_id)))
-
-            # Assert that the only query rows in the attention mask with no entries are pad tokens
-            # assert torch.all((reduce(attn_mask, "batch seq_q seq_k -> batch seq_q", "sum") > 0) | (input_ids_reordered == pad_id))
-
         logits = self._forward(
-            input_ids_reordered, reorder_idx_seq, attn_mask, io_interface_mask, inference_groups, first_inference_groups
+            input_ids_reordered, reorder_idx_seq, attn_mask, io_interface_mask, inference_groups,
         )
 
         # Assert no nans
@@ -285,7 +260,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             # with ignore and then shove the whole thing into cross entropy
             # without any shifts.
             labels_reordered = torch.where(
-                inference_groups == first_inference_groups.unsqueeze(1), labels_reordered, ignore_id
+                inference_groups == first_inference_groups.unsqueeze(1), ignore_id, labels_reordered
             )
             # Reorder indexes of logits for cross entropy
             logits_rearranged = rearrange(logits, "batch seq vocab -> batch vocab seq")

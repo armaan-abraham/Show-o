@@ -355,28 +355,6 @@ def main():
 
     vq_model.to(device=accelerator.device)
 
-    # ##################################
-    # #     Register Backward Hooks   #
-    # ##################################
-    # def backward_hook(module, grad_input, grad_output):
-    #     """Detect NaN/Inf in gradients during backward pass"""
-    #     module_name = module.__class__.__name__
-    #     for idx, grad in enumerate(grad_output):
-    #         if grad is not None:
-    #             has_nan = torch.isnan(grad).any()
-    #             has_inf = torch.isinf(grad).any()
-    #             if has_nan or has_inf:
-    #                 logger.info(f"NaN/Inf detected in {module_name} grad_output[{idx}]")
-    #                 logger.info(f"  NaN: {has_nan}, Inf: {has_inf}")
-    #                 logger.info(f"  Shape: {grad.shape}")
-    #                 if not has_nan:
-    #                     logger.info(f"  Mean: {grad.mean()}, Max: {grad.abs().max()}")
-
-    # # Register backward hooks on all modules
-    # for name, module in model.named_modules():
-    #     module.register_full_backward_hook(backward_hook)
-
-    # logger.info("Registered backward hooks for NaN/Inf detection")
 
     ##################################
     #             Training          #
@@ -394,11 +372,10 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch, batch_idx, dataloader_idx in combined_dataloader:
-            print("Batch idx:", batch_idx)
 
             # Debug logging - save images and text info for first iteration on main process
-            if global_step == 0 and accelerator.is_main_process:
-                save_debug_batch_info(batch, config, config.experiment.output_dir)
+            if global_step % config.experiment.generate_every and accelerator.is_main_process:
+                save_debug_info(batch, config, config.experiment.output_dir, global_step)
 
             # for loss calculation
             batch_size_t2i = batch["t2i_flow"]["images"].shape[0]
@@ -546,10 +523,10 @@ def main():
     accelerator.end_training()
 
 
-def save_debug_batch_info(batch, config, output_dir):
-    """Save debug information for the first batch including text and images."""
+def save_debug_info(batch, config, output_dir, global_step):
     # Save debug info to file
-    debug_file_path = f"{output_dir}/debug_batch_info.txt"
+    os.makedirs(f"{output_dir}/{global_step}", exist_ok=True)
+    debug_file_path = f"{output_dir}/{global_step}/debug_batch_info.txt"
     with open(debug_file_path, 'w') as f:
         f.write("=" * 80 + "\n")
         f.write("T2I Flow - Text prompt (first 200 chars):\n")
@@ -564,23 +541,21 @@ def save_debug_batch_info(batch, config, output_dir):
         f.write(f"MMU Flow - Image shape: {batch['mmu_flow']['images'][0].shape}\n")
         f.write("=" * 80 + "\n")
 
-    # Save T2I flow image
+    # Save T2I image
     t2i_image = batch['t2i_flow']['images'][0]
     t2i_image = torch.clamp((t2i_image + 1.0) / 2.0, min=0.0, max=1.0)
     t2i_image *= 255.0
     t2i_image = t2i_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
     t2i_pil = Image.fromarray(t2i_image)
-    t2i_pil.save(f"{output_dir}/debug_t2i_flow.png")
+    t2i_pil.save(f"{output_dir}/{global_step}/debug_t2i_flow.png")
 
-    # Save MMU flow image
+    # Save MMU image
     mmu_image = batch['mmu_flow']['images'][0]
     mmu_image = torch.clamp((mmu_image + 1.0) / 2.0, min=0.0, max=1.0)
     mmu_image *= 255.0
     mmu_image = mmu_image.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
     mmu_pil = Image.fromarray(mmu_image)
-    mmu_pil.save(f"{output_dir}/debug_mmu_flow.png")
-
-    logger.info(f"Saved debug info and images to {output_dir}")
+    mmu_pil.save(f"{output_dir}/{global_step}/debug_mmu_flow.png")
 
 def save_checkpoint(model, config, accelerator, global_step):
     output_dir = config.experiment.output_dir
@@ -630,7 +605,6 @@ def log_grad_norm(model, accelerator, global_step):
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
             grad_mean = grads.mean().item()
             grad_max = grads.abs().max().item()
-            logger.info(f"{name} - mean: {grad_mean:.6f}, max: {grad_max:.6f}")
             accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
 
 
