@@ -3,3 +3,5 @@ __pycache__
 attention_mask*.pt
 input_ids*.pt
 show-o-training-stage1/*
+train-easy-lg/*
+train-easy/*
