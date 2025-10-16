@@ -5,8 +5,8 @@ wandb:
 
 experiment:
     project: "training"
-    name: "show-o-training-stage2"
-    output_dir: "show-o-training-stage1"
+    name: "train-easy-lg"
+    output_dir: "train-easy-lg"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
     save_every: 10000
@@ -33,8 +33,8 @@ model:
         
         image_len: 256
 
-        num_layers_input: 2
-        num_layers_output: 2
+        num_layers_input: 1
+        num_layers_output: 1
         d_model: 64
         d_mlp: 256
 
@@ -80,7 +80,7 @@ lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 5000
+        warmup_steps: 500
 
 training:
     gradient_accumulation_steps: 1

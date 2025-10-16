@@ -5,8 +5,8 @@ wandb:
 
 experiment:
     project: "training"
-    name: "show-o-training-stage2"
-    output_dir: "show-o-training-stage1"
+    name: "train-easy"
+    output_dir: "train-easy"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
     save_every: 10000

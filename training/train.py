@@ -424,7 +424,7 @@ def main():
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
-                assert input_ids.shape[1] <= model.config.max_seq_len
+                assert input_ids.shape[1] <= config.model.easy_transformer.max_seq_len
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu = model(
@@ -463,7 +463,6 @@ def main():
                 if (
                         accelerator.sync_gradients
                         and (global_step + 1) % config.experiment.log_grad_norm_every == 0
-                        and accelerator.is_main_process
                 ):
                     log_grad_norm(model, accelerator, global_step + 1)
 
@@ -481,7 +480,7 @@ def main():
                             config.training.gradient_accumulation_steps * total_batch_size_per_gpu / batch_time_m.val
                     )
                     # Calculate average fraction of ignore tokens per row
-                    avg_ignore_fraction_per_seq = (labels == uni_prompting.ignore_id).float().mean(dim=1).mean().item()
+                    ignore_fraction = (labels == uni_prompting.ignore_id).float().mean().item()
 
                     logs = {
                         "step_loss_t2i": avg_loss_t2i.item(),
@@ -491,7 +490,7 @@ def main():
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
-                        "avg_ignore_fraction_per_seq": avg_ignore_fraction_per_seq,
+                        "ignore_fraction": ignore_fraction,
                     }
                     accelerator.log(logs, step=global_step + 1)
 
