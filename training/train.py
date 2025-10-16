@@ -29,6 +29,7 @@ from PIL import Image
 from omegaconf import OmegaConf
 import wandb
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from lightning.pytorch.utilities import CombinedLoader
 
@@ -65,6 +66,34 @@ except ImportError:
     is_apex_available = False
 
 logger = get_logger(__name__, log_level="INFO")
+
+
+def compute_average_entropy(logits, labels, ignore_id):
+    """
+    Compute average entropy for predicted logits, masking out padding/ignore tokens.
+
+    Args:
+        logits: Tensor of shape [batch_size, seq_len, vocab_size]
+        labels: Tensor of shape [batch_size, seq_len]
+        ignore_id: ID value to ignore (padding/ignore tokens)
+
+    Returns:
+        Average entropy value as a float
+    """
+    # Create mask for non-ignore tokens
+    non_ignore_mask = (labels != ignore_id)
+
+    # Compute probabilities from logits
+    probs = F.softmax(logits, dim=-1)
+
+    log_probs = torch.log(probs)
+    entropy = -(probs * log_probs).sum(dim=-1)
+
+    # Apply mask and compute average
+    masked_entropy = entropy * non_ignore_mask.float()
+    avg_entropy = masked_entropy.sum() / non_ignore_mask.sum()
+
+    return avg_entropy.item()
 
 
 def get_vq_model_class(model_type):
@@ -482,10 +511,30 @@ def main():
                     # Calculate average fraction of ignore tokens per row
                     ignore_fraction = (labels == uni_prompting.ignore_id).float().mean().item()
 
+                    # Compute entropy for each data type separately
+                    with torch.no_grad():
+                        # Split logits and labels by data type
+                        logits_t2i = logits[:batch_size_t2i]
+                        labels_t2i = labels[:batch_size_t2i]
+
+                        logits_lm = logits[batch_size_t2i:batch_size_t2i+batch_size_lm]
+                        labels_lm = labels[batch_size_t2i:batch_size_t2i+batch_size_lm]
+
+                        logits_mmu = logits[batch_size_t2i+batch_size_lm:]
+                        labels_mmu = labels[batch_size_t2i+batch_size_lm:]
+
+                        # Compute average entropy for each data type
+                        entropy_t2i = compute_average_entropy(logits_t2i, labels_t2i, uni_prompting.ignore_id)
+                        entropy_lm = compute_average_entropy(logits_lm, labels_lm, uni_prompting.ignore_id)
+                        entropy_mmu = compute_average_entropy(logits_mmu, labels_mmu, uni_prompting.ignore_id)
+
                     logs = {
                         "step_loss_t2i": avg_loss_t2i.item(),
                         "step_loss_mmu": avg_loss_mmu.item(),
                         "step_loss_lm": avg_loss_lm.item(),
+                        "entropy_t2i": entropy_t2i,
+                        "entropy_lm": entropy_lm,
+                        "entropy_mmu": entropy_mmu,
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
@@ -499,6 +548,9 @@ def main():
                         f"Loss_t2i: {avg_loss_t2i.item():0.4f} "
                         f"Loss_mmu: {avg_loss_mmu.item():0.4f} "
                         f"Loss_lm: {avg_loss_lm.item():0.4f} "
+                        f"Entropy_t2i: {entropy_t2i:0.4f} "
+                        f"Entropy_lm: {entropy_lm:0.4f} "
+                        f"Entropy_mmu: {entropy_mmu:0.4f} "
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
