@@ -81,7 +81,7 @@ def main():
     # SETUP Accelerator     #
     #########################
     config = get_config()
-    num_dataloader_workers = os.environ.get("NUM_DATALOADER_WORKERS", config.dataset.params.num_workers)
+    num_dataloader_workers = int(os.environ.get("NUM_DATALOADER_WORKERS", config.dataset.params.num_workers))
 
     # Enable TF32 on Ampere GPUs
     if config.training.enable_tf32:
@@ -121,11 +121,18 @@ def main():
         level=logging.INFO,
     )
     logger.info(accelerator.state, main_process_only=False)
-    logger.info(f"{num_dataloader_workers=}")
     if accelerator.is_local_main_process:
         set_verbosity_info()
     else:
         set_verbosity_error()
+
+    if accelerator.is_local_main_process:
+        set_verbosity_info()
+    else:
+        set_verbosity_error()
+
+    logger.info(f"{num_dataloader_workers=}")
+    logger.info(f"{total_batch_size=}")
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
