@@ -32,10 +32,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         d_mlp: int,
         num_heads: int,
         dtype: str,
-        accelerator,
     ):
         super().__init__()
-        self.accelerator = accelerator
         self.num_heads = num_heads
         self.dtype_torch = dtype_str_to_torch[dtype]
 

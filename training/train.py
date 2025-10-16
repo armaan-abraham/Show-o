@@ -81,6 +81,7 @@ def main():
     # SETUP Accelerator     #
     #########################
     config = get_config()
+    num_dataloader_workers = os.environ.get("NUM_DATALOADER_WORKERS", config.dataset.params.num_workers)
 
     # Enable TF32 on Ampere GPUs
     if config.training.enable_tf32:
@@ -120,6 +121,7 @@ def main():
         level=logging.INFO,
     )
     logger.info(accelerator.state, main_process_only=False)
+    logger.info(f"{num_dataloader_workers=}")
     if accelerator.is_local_main_process:
         set_verbosity_info()
     else:
@@ -163,7 +165,7 @@ def main():
     #########################
     # MODELS and OPTIMIZER  #
     #########################
-    tokenizer = AutoTokenizer.from_pretrained(config.model.text_tokenizer, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(config.model.tokenize.text_tokenizer, padding_side="left")
 
     # unified prompting for show-o
     uni_prompting = UniversalPrompting(tokenizer, max_text_len=config.dataset.preprocessing.max_seq_length,
@@ -189,7 +191,7 @@ def main():
     # Initialize model
     if "easy_transformer" in config.model:
         model = EasyTransformer(
-            accelerator=accelerator, 
+            vocab_size=config.model.tokenize.vocab_size,
             **config.model.easy_transformer
         ).to(accelerator.device)
         ignore_prefix_tokens = False
@@ -279,7 +281,7 @@ def main():
 
     train_dataloader_t2i = DataLoader(dataset_imagenet, batch_size=config.training.batch_size_t2i,
                                     sampler=sampler, collate_fn=dataset_imagenet.collate_fn,
-                                    shuffle=shuffle, num_workers=dataset_config.num_workers)
+                                    shuffle=shuffle, num_workers=num_dataloader_workers)
     num_update_steps_per_epoch = math.ceil(len(dataset_imagenet) / total_batch_size_t2i)
     num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
     logger.info("Done t2i loader")
@@ -291,7 +293,7 @@ def main():
         tokenizer=None,  # we want to get raw texts
         max_seq_length=preproc_config.max_seq_length,
         per_gpu_batch_size=config.training.batch_size_mmu,
-        num_workers=dataset_config.num_workers,
+        num_workers=num_dataloader_workers,
         seed=config.training.seed,
         resolution=preproc_config.resolution,
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
@@ -311,7 +313,7 @@ def main():
         dataset_lm,
         batch_size=config.training.batch_size_lm,
         collate_fn=dataset_lm.collate_fn,
-        num_workers=dataset_config.num_workers
+        num_workers=num_dataloader_workers
     )
     logger.info("Done lm loader")
 
@@ -505,7 +507,18 @@ def main():
                     save_checkpoint(model, config, accelerator, global_step + 1)
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    logger.info("Would be generating images now")
+                    visualize_predictions(
+                        model,
+                        vq_model,
+                        uni_prompting,
+                        config,
+                        global_step + 1,
+                        input_ids,
+                        image_tokens,
+                        batch["t2i_flow"]["images"],
+                        texts,
+                        logits,
+                    )
 
                 global_step += 1
 
@@ -525,6 +538,87 @@ def main():
         model.save_pretrained(config.experiment.output_dir, safe_serialization=False)
 
     accelerator.end_training()
+
+
+@torch.no_grad()
+def visualize_predictions(
+        model,
+        vq_model,
+        uni_prompting,
+        config,
+        global_step,
+        input_ids,
+        image_tokens_ori,
+        ori_images,
+        texts,
+        logits,
+):
+    """
+    Visualize predictions by showing original images, VQ reconstructed images, and model predictions side by side.
+
+    This function compares:
+    - Original images from the dataset
+    - Reconstructed images from VQ codes
+    - Predicted images from the model's logits
+    """
+    logger.info("Visualizing predictions...")
+    model.eval()
+
+    # Decode original image tokens to get VQ reconstructions
+    recons_images = vq_model.decode_code(image_tokens_ori - len(uni_prompting.text_tokenizer))
+    recons_images = torch.clamp((recons_images + 1.0) / 2.0, min=0.0, max=1.0)
+    recons_images *= 255.0
+    recons_images = recons_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+
+    # Process original images
+    images = torch.clamp((ori_images + 1.0) / 2.0, min=0.0, max=1.0)
+    images *= 255.0
+    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+
+    # Extract predictions from logits for t2i batch
+    # With right padding, we need to find SOI token and extract image tokens after it
+    num_vq_tokens = config.model.tokenize.num_vq_tokens
+    llm_vocab_size = config.model.tokenize.llm_vocab_size
+    num_new_special_tokens = config.model.tokenize.num_new_special_tokens
+    vocab_size = config.model.tokenize.vocab_size
+
+    soi_id = int(uni_prompting.sptids_dict['<|soi|>'])
+
+    # Get t2i batch only
+    input_ids_t2i = input_ids[:config.training.batch_size_t2i]
+    logits_t2i = logits[:config.training.batch_size_t2i]
+
+    # Find SOI positions for each sequence in the batch
+    soi_positions = (input_ids_t2i == soi_id).nonzero(as_tuple=True)[1]
+
+    # Extract image token predictions starting after SOI
+    # We need to gather the predictions for image token positions
+    batch_predictions = []
+    for soi_pos, seq_logits in zip(soi_positions, logits_t2i):
+        soi_pos = soi_pos.item()
+        # Extract logits for image tokens (num_vq_tokens after SOI)
+        # Also only extract logits corresponding to image tokens in vocab
+        img_logits = seq_logits[soi_pos+1:soi_pos+1+num_vq_tokens, llm_vocab_size + num_new_special_tokens:-1]
+        img_predictions = img_logits.argmax(dim=-1)
+        batch_predictions.append(img_predictions)
+
+    predictions = torch.stack(batch_predictions)
+
+    # Decode predicted images
+    predicted_images = vq_model.decode_code(predictions)
+    predicted_images = torch.clamp((predicted_images + 1.0) / 2.0, min=0.0, max=1.0)
+    predicted_images *= 255.0
+    predicted_images = predicted_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+
+    # Concatenate images horizontally: original | reconstructed | predicted
+    predicted_images = np.concatenate((images, recons_images, predicted_images), 2)
+    pil_images = [Image.fromarray(image) for image in predicted_images]
+
+    # Log images to wandb
+    wandb_images = [wandb.Image(image, caption=texts[i]) for i, image in enumerate(pil_images)]
+    wandb.log({"Original images v.s. Reconstructed images v.s. Predicted images": wandb_images}, step=global_step)
+
+    model.train()
 
 
 def save_debug_info(batch, config, output_dir, global_step):

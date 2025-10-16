@@ -124,7 +124,6 @@ class Text2ImageDataset:
             is_captioning: bool = False,
             add_caption_prompt: bool = False,
     ):
-        print("num workers", num_workers)
         self.is_captioning = is_captioning
         self.add_caption_prompt = add_caption_prompt
         if self.add_caption_prompt:

@@ -21,10 +21,14 @@ model:
         type: "magvitv2"
         vq_model_name: "showlab/magvitv2"
     
-    text_tokenizer: "microsoft/phi-1_5"
+    tokenize:
+        text_tokenizer: "microsoft/phi-1_5"
+        vocab_size: 58498
+        num_vq_tokens: 256
+        num_new_special_tokens: 10  # <|soi|> <|eoi|> <|sov|> <|eov|> <|t2i|> <|mmu|> <|t2v|> <|v2v|> <|lvg|> <|pad|>
+        llm_vocab_size: 50295
 
     easy_transformer:
-        vocab_size: 58498
         max_seq_len: 387
         
         image_len: 256
