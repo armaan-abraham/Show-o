@@ -605,6 +605,9 @@ def log_grad_norm(model, accelerator, global_step):
         if param.grad is not None:
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            grad_mean = grads.mean().item()
+            grad_max = grads.abs().max().item()
+            logger.info(f"{name} - mean: {grad_mean:.6f}, max: {grad_max:.6f}")
             accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
 
 

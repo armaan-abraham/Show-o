@@ -78,7 +78,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
         batch_size, seq_len = input_ids_reordered.shape
 
-        with torch.autocast(dtype=self.dtype_torch, device_type=input_ids_reordered.device.type):
+        with torch.autocast(dtype=torch.float32, device_type=input_ids_reordered.device.type):
 
             resid = self.tok_embed(input_ids_reordered) + self.input_pos_embed(
                 reorder_idx_seq
@@ -95,11 +95,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             output_resid = self.output_pos_embed(reorder_idx_seq)
             assert output_resid.shape == (batch_size, seq_len, self.config.d_model)
             assert resid.shape == output_resid.shape
-            print(f"Output resid 0", output_resid[0, :20, :5])
-            print(f"resid 0", resid[0, :20, :5])
-            print("resid 0 dtype", resid.dtype)
-            print(f"k transform", self.input_k_transform(resid)[0, :20, :5])
-            print(f"io interface mask", io_interface_mask[0, :20, :20].int())
 
             # For Q rows in attn mask that are all false, the residuals will be
             # nan. For this operation, we use a modified version of the
@@ -109,6 +104,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 resid,
                 0.0,
             )
+            assert torch.all(torch.isfinite(resid_noq_zero)), resid_noq_zero
 
             # Compute full attention weight matrix with initial output residual
             # streams as Q and final input residual streams (transformed) as K.
@@ -117,48 +113,38 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 self.input_k_transform(resid_noq_zero), # K
                 "batch seq_q d_model, batch seq_k d_model -> batch seq_q seq_k"
             ) / seq_len ** 0.5 # scaling factor
-            torch.set_printoptions(sci_mode=True, precision=0)
-            print("attn weights")
-            print(attn_weights[0, :20, :20])
+
             # Apply our attention mask
-            attn_weights.masked_fill_(~io_interface_mask, float("-inf"))
-            print("attn weights fill")
-            print(attn_weights[0, :20, :20])
-            attn_weights = torch.softmax(attn_weights, dim=-1)
-            print("attn weights softmax")
-            print(attn_weights[0, :20, :20])
-            print("full for 10")
-            print(attn_weights[0, 10])
-            print(attn_weights[0, 10].sum())
+            attn_weights.masked_fill_(~io_interface_mask, 1e-5)
+
+            # Only compute softmax over rows that have at least one entry in Q
+            valid = repeat(reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q", "sum") > 0, "batch seq_q -> batch seq_q seq_k", seq_k=seq_len)
+            attn_probs = torch.zeros_like(attn_weights, dtype=attn_weights.dtype)
+            attn_probs[valid] = torch.softmax(attn_weights[valid], dim=-1).to(attn_weights.dtype)
+            attn_probs[~valid] = 0.0
+            attn_probs = torch.where(
+                io_interface_mask,
+                attn_probs,
+                0.0,
+            )
+
+            assert torch.all(torch.isfinite(attn_probs))
+
             attn_result = einsum(
-                attn_weights, # QK
+                attn_probs, # QK
                 resid_noq_zero, # V
                 "batch seq_q seq_k, batch seq_k d_model -> batch seq_q d_model"
             )
+
             assert attn_result.shape == (batch_size, seq_len, self.config.d_model)
-            print("attn result")
-            print(attn_result[0, :20, :5])
-            torch.set_printoptions(profile='default')
 
-            # Get mask for inference groups for which the preceding inference
-            # group has only one element.
-            monoinput_inference_groups = (reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q", "sum") == 1).unsqueeze(-1)
-
-            # The first inference group has no corresponding input for its
-            # output, so we just set the initial output residual stream to the
-            # output positional embedding.
-            resid = torch.where(
-                (inference_groups == first_inference_groups.unsqueeze(1)).unsqueeze(-1) | monoinput_inference_groups, 
-                output_resid,
-                output_resid + attn_result,
-            )
+            resid = output_resid + attn_result
 
             is_finite = torch.isfinite(resid)
-            is_masked = (input_ids_reordered == 50295).unsqueeze(-1)
-            all_valid = torch.all(is_finite | is_masked)
+            all_valid = torch.all(is_finite)
             if not all_valid:
                 print("non-finite values after io blocks at positions:")
-                problematic = (~is_finite) & (~is_masked)
+                problematic = ~is_finite
                 positions = torch.nonzero(problematic)
                 unique_positions = torch.unique(positions[:, :2], dim=0)
                 print(unique_positions[:5])
@@ -180,7 +166,13 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 print(unique_positions)
             assert all_valid, "found non-finite values in non-masked positions"
 
-            logits = self.unembed(resid)
+            resid_noq_zero = torch.where(
+                reduce(attn_mask, "batch seq_q seq_k -> batch seq_q 1", "sum") > 0,
+                resid,
+                0.0,
+            )
+
+            logits = self.unembed(resid_noq_zero)
 
         return logits
 
@@ -199,6 +191,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         label_smoothing: float = 0.0,
         **kwargs,
     ):
+        torch.autograd.set_detect_anomaly(True)
         print("batch sizes:", batch_size_t2i, batch_size_lm, batch_size_mmu)
         print("pad id", pad_id)
         print("ignore id", ignore_id)
@@ -278,6 +271,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             # Get input output interface mask, which is a sparse attention mask for
             # passing residuals from last input block to first output block
             io_interface_mask = get_io_interface_mask(inference_groups)
+            io_interface_mask = remove_pads_from_attn_mask(io_interface_mask, input_ids_reordered, pad_id)
             assert io_interface_mask.shape == (batch_size, seq_len, seq_len)
 
             # Construct mask designating where inferences start in each batch.
@@ -299,7 +293,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         )
 
         # Assert no nans
-        assert torch.all(torch.isfinite(logits) | (input_ids_reordered == pad_id).unsqueeze(-1)), "Logits contain NaNs or Infs"
+        assert torch.all(torch.isfinite(logits)), "Logits contain NaNs or Infs"
 
         if labels is not None:
             assert labels.shape == input_ids.shape
