@@ -4,8 +4,8 @@
 #SBATCH --account=iris
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1 
-#SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:a40:4
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:a40:2
 #SBATCH --time=04:00:00
 #SBATCH --output=/iris/u/armaana/jobs/logs/%x_%j.out
 #SBATCH --error=/iris/u/armaana/jobs/logs/%x_%j.err
@@ -20,7 +20,7 @@ cd /iris/u/armaana/Show-o-base/Show-o
 . .venv/bin/activate
 
 # We could check nproc but CPU isolation sometimes messes with this I think
-export NUM_DATALOADER_WORKERS=32
+export NUM_DATALOADER_WORKERS=16
 
 # Your commands here
 echo "Starting job"

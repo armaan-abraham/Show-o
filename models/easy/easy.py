@@ -155,7 +155,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         keep_prediction_order: bool = False,
         **kwargs,
     ):
-        torch.autograd.set_detect_anomaly(True)
         with torch.no_grad():
             device = input_ids.device
             batch_size = input_ids.shape[0]
@@ -163,59 +162,64 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             seq_len = input_ids.shape[1]
             assert seq_len <= self.config.max_seq_len
 
-            # Construct inference groups and reorder idxs for each task type then combine
-            # t2i and mmu have images so we need to reorder
-            (reorder_idx_t2i_batch, reorder_idx_t2i_seq), inference_groups_t2i = (
-                reorder_and_group_token_batch(
-                    input_ids[:batch_size_t2i],
-                    soi_id,
-                    eoi_id,
-                    self.config.image_len,
-                )
-            )
-            (reorder_idx_mmu_batch, reorder_idx_mmu_seq), inference_groups_mmu = (
-                reorder_and_group_token_batch(
-                    input_ids[batch_size_t2i + batch_size_lm :],
-                    soi_id,
-                    eoi_id,
-                    self.config.image_len,
-                )
-            )
-            reorder_idx_lm_seq = repeat(
-                torch.arange(seq_len, device=device),
-                "seq -> batch seq",
-                batch=batch_size_lm,
-            ).clone()
-            reorder_idx_lm_batch = torch.arange(
-                batch_size_lm, device=device
-            ).unsqueeze(1)
-            inference_groups_lm = reorder_idx_lm_seq.clone()
 
-            # Combine reorder idx
-            reorder_idx_batch = torch.cat(
-                [
-                    reorder_idx_t2i_batch,
-                    reorder_idx_lm_batch + batch_size_t2i,
-                    reorder_idx_mmu_batch + batch_size_t2i + batch_size_lm,
-                ]
-            )
-            reorder_idx_seq = torch.cat(
-                [reorder_idx_t2i_seq, reorder_idx_lm_seq, reorder_idx_mmu_seq], dim=0
-            )
-            assert reorder_idx_batch.shape == (batch_size, 1)
-            assert reorder_idx_seq.shape == (batch_size, seq_len)
-            assert torch.unique(reorder_idx_batch).shape == (batch_size,)
-            assert reorder_idx_batch[0][0] == 0
+            inference_groups = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size)
+            reorder_idx_seq = inference_groups.clone()
+            reorder_idx_batch = torch.arange(batch_size, device=device).unsqueeze(1)
 
-            # Combine inference groups
-            inference_groups = torch.cat(
-                [inference_groups_t2i, inference_groups_lm, inference_groups_mmu], dim=0
-            )
-            assert inference_groups.shape == (batch_size, seq_len)
-            assert torch.all(inference_groups[:, 0] == 0)
-            # Currently, we shouldn't have any first inference groups larger
-            # than one token.
-            assert torch.all((inference_groups == 0).sum(dim=1) == 1)
+            # # Construct inference groups and reorder idxs for each task type then combine
+            # # t2i and mmu have images so we need to reorder
+            # (reorder_idx_t2i_batch, reorder_idx_t2i_seq), inference_groups_t2i = (
+            #     reorder_and_group_token_batch(
+            #         input_ids[:batch_size_t2i],
+            #         soi_id,
+            #         eoi_id,
+            #         self.config.image_len,
+            #     )
+            # )
+            # (reorder_idx_mmu_batch, reorder_idx_mmu_seq), inference_groups_mmu = (
+            #     reorder_and_group_token_batch(
+            #         input_ids[batch_size_t2i + batch_size_lm :],
+            #         soi_id,
+            #         eoi_id,
+            #         self.config.image_len,
+            #     )
+            # )
+            # reorder_idx_lm_seq = repeat(
+            #     torch.arange(seq_len, device=device),
+            #     "seq -> batch seq",
+            #     batch=batch_size_lm,
+            # ).clone()
+            # reorder_idx_lm_batch = torch.arange(
+            #     batch_size_lm, device=device
+            # ).unsqueeze(1)
+            # inference_groups_lm = reorder_idx_lm_seq.clone()
+
+            # # Combine reorder idx
+            # reorder_idx_batch = torch.cat(
+            #     [
+            #         reorder_idx_t2i_batch,
+            #         reorder_idx_lm_batch + batch_size_t2i,
+            #         reorder_idx_mmu_batch + batch_size_t2i + batch_size_lm,
+            #     ]
+            # )
+            # reorder_idx_seq = torch.cat(
+            #     [reorder_idx_t2i_seq, reorder_idx_lm_seq, reorder_idx_mmu_seq], dim=0
+            # )
+            # assert reorder_idx_batch.shape == (batch_size, 1)
+            # assert reorder_idx_seq.shape == (batch_size, seq_len)
+            # assert torch.unique(reorder_idx_batch).shape == (batch_size,)
+            # assert reorder_idx_batch[0][0] == 0
+
+            # # Combine inference groups
+            # inference_groups = torch.cat(
+            #     [inference_groups_t2i, inference_groups_lm, inference_groups_mmu], dim=0
+            # )
+            # assert inference_groups.shape == (batch_size, seq_len)
+            # assert torch.all(inference_groups[:, 0] == 0)
+            # # Currently, we shouldn't have any first inference groups larger
+            # # than one token.
+            # assert torch.all((inference_groups == 0).sum(dim=1) == 1)
 
             # Reorder input ids
             input_ids_reordered = input_ids[reorder_idx_batch, reorder_idx_seq]

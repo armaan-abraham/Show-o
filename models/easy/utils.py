@@ -153,7 +153,7 @@ if __name__ == "__main__":
         print("Level")
         print(level_results)
 
-    indexes, grouping = get_index_and_grouping(4)
+    indexes, grouping = get_index_and_grouping(16)
     print("Indexes")
     print(len(indexes))
     print(indexes)

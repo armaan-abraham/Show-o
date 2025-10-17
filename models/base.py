@@ -87,4 +87,107 @@ class Transformer(nn.Module):
             assert logits.shape == (batch_size, seq_len, self.vocab_size)
 
             return logits
+
+
+class TransformerForShowo(ModelMixin, ConfigMixin):
+    _supports_gradient_checkpointing = True
+
+    @register_to_config
+    def __init__(
+        self,
+        vocab_size: int,
+        max_seq_len: int,
+        num_layers_input: int,
+        num_layers_output: int,
+        image_len: int,
+        d_model: int,
+        d_mlp: int,
+        num_heads: int,
+        dtype: str,
+    ):
+        super().__init__()
+        num_layers = num_layers_input + num_layers_output
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.position_embedding = nn.Embedding(max_seq_len, d_model)
         
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=d_mlp,
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, self.num_layers)
+        self.output = nn.Linear(d_model, vocab_size)
+
+    def generate_causal_mask(self, sz):
+        # Create causal mask (upper triangular = True means masked)
+        mask = torch.triu(torch.ones(sz, sz), diagonal=1).bool()
+        return mask
+
+    def _forward(self, x):
+        seq_len = x.size(1)
+        
+        # Embeddings
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+        x = self.token_embedding(x) + self.position_embedding(positions)
+        
+        # Causal mask
+        mask = self.generate_causal_mask(seq_len).to(x.device)
+        
+        # Transformer
+        x = self.transformer(x, mask=mask, is_causal=True)
+        
+        # Output projection
+        logits = self.output(x)
+        return logits
+    
+    def forward(
+        self,
+        input_ids: Int[Tensor, "batch seq"],
+        batch_size_t2i: int,
+        batch_size_lm: int,
+        batch_size_mmu: int,
+        pad_id: int,
+        soi_id: int,
+        eoi_id: int,
+        ignore_id: int,
+        labels: Int[Tensor, "batch seq"] = None,
+        global_step: int = None,
+        label_smoothing: float = 0.0,
+        keep_prediction_order: bool = False,
+        **kwargs,
+    ):
+        logits = self._forward(input_ids)
+
+        result = [logits]
+
+        if labels is not None:
+            loss_t2i = F.cross_entropy(
+                input=logits[:batch_size_t2i, :-1],
+                target=labels[:batch_size_t2i, 1:],
+                ignore_index=ignore_id,
+                label_smoothing=label_smoothing,
+            )
+
+            loss_lm = F.cross_entropy(
+                input=logits_rearranged[
+                    batch_size_t2i : batch_size_t2i + batch_size_lm, :-1
+                ],
+                target=labels_reordered[
+                    batch_size_t2i : batch_size_t2i + batch_size_lm, 1:
+                ],
+                ignore_index=ignore_id,
+                label_smoothing=label_smoothing,
+            )
+
+
+            loss_mmu = F.cross_entropy(
+                input=logits_rearranged[batch_size_t2i + batch_size_lm :, :-1],
+                target=labels_reordered[batch_size_t2i + batch_size_lm :, 1:],
+                ignore_index=ignore_id,
+                label_smoothing=label_smoothing,
+            ) 
+            
+            result += [loss_t2i, loss_lm, loss_mmu]
+        
+        return tuple(result)

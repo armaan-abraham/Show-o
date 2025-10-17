@@ -482,18 +482,19 @@ def main():
 
                 accelerator.backward(loss)
 
+                if (
+                        accelerator.sync_gradients
+                        and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                ):
+                    log_grad_norm(model, accelerator, global_step + 1)
+                    accelerator.wait_for_everyone()
+
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
 
                 optimizer.step()
                 lr_scheduler.step()
 
-                # log gradient norm before zeroing it
-                if (
-                        accelerator.sync_gradients
-                        and (global_step + 1) % config.experiment.log_grad_norm_every == 0
-                ):
-                    log_grad_norm(model, accelerator, global_step + 1)
 
                 optimizer.zero_grad(set_to_none=True)
 
@@ -755,7 +756,9 @@ def save_checkpoint(model, config, accelerator, global_step):
 
 
 def log_grad_norm(model, accelerator, global_step):
+    accelerator.print(model.named_parameters())
     for name, param in model.named_parameters():
+        accelerator.print(name, param.grad)
         if param.grad is not None:
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
