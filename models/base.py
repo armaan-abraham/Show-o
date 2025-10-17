@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 from einops import einsum, rearrange, repeat
 from jaxtyping import Float, Int, Bool
+from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 
 dtype_str_to_torch = {
     "bf16": torch.bfloat16,
@@ -106,6 +108,8 @@ class TransformerForShowo(ModelMixin, ConfigMixin):
         dtype: str,
     ):
         super().__init__()
+        self.register_to_config(mask_token_id=vocab_size - 1)
+        print("Initializing Transformer")
         num_layers = num_layers_input + num_layers_output
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         self.position_embedding = nn.Embedding(max_seq_len, d_model)
@@ -116,7 +120,7 @@ class TransformerForShowo(ModelMixin, ConfigMixin):
             dim_feedforward=d_mlp,
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, self.num_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
         self.output = nn.Linear(d_model, vocab_size)
 
     def generate_causal_mask(self, sz):
@@ -162,8 +166,9 @@ class TransformerForShowo(ModelMixin, ConfigMixin):
         result = [logits]
 
         if labels is not None:
+            logits_rearranged = rearrange(logits, "batch seq vocab -> batch vocab seq")
             loss_t2i = F.cross_entropy(
-                input=logits[:batch_size_t2i, :-1],
+                input=logits_rearranged[:batch_size_t2i, :, :-1],
                 target=labels[:batch_size_t2i, 1:],
                 ignore_index=ignore_id,
                 label_smoothing=label_smoothing,
@@ -171,9 +176,9 @@ class TransformerForShowo(ModelMixin, ConfigMixin):
 
             loss_lm = F.cross_entropy(
                 input=logits_rearranged[
-                    batch_size_t2i : batch_size_t2i + batch_size_lm, :-1
+                    batch_size_t2i : batch_size_t2i + batch_size_lm, :, :-1
                 ],
-                target=labels_reordered[
+                target=labels[
                     batch_size_t2i : batch_size_t2i + batch_size_lm, 1:
                 ],
                 ignore_index=ignore_id,
@@ -182,8 +187,8 @@ class TransformerForShowo(ModelMixin, ConfigMixin):
 
 
             loss_mmu = F.cross_entropy(
-                input=logits_rearranged[batch_size_t2i + batch_size_lm :, :-1],
-                target=labels_reordered[batch_size_t2i + batch_size_lm :, 1:],
+                input=logits_rearranged[batch_size_t2i + batch_size_lm :, :, :-1],
+                target=labels[batch_size_t2i + batch_size_lm :, 1:],
                 ignore_index=ignore_id,
                 label_smoothing=label_smoothing,
             ) 

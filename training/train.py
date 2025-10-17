@@ -45,6 +45,7 @@ from training.c4_dataset import C4Dataset
 
 from models import Showo, MAGVITv2, get_mask_chedule
 from models.easy import EasyTransformer
+from models.base import TransformerForShowo
 from training.prompting_utils import UniversalPrompting
 from models.lr_schedulers import get_scheduler
 from models.logging import set_verbosity_info, set_verbosity_error
@@ -225,18 +226,20 @@ def main():
     vq_model.requires_grad_(False)
 
     # Initialize model
-    if "easy_transformer" in config.model:
-        model = EasyTransformer(
-            vocab_size=config.model.tokenize.vocab_size,
-            **config.model.easy_transformer
-        ).to(accelerator.device)
-        ignore_prefix_tokens = False
-    else:
-        assert "showo" in config.model
-        model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
-        ignore_prefix_tokens = True
+    model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
+    ignore_prefix_tokens = False
+    # if "easy_transformer" in config.model:
+    #     model = EasyTransformer(
+    #         vocab_size=config.model.tokenize.vocab_size,
+    #         **config.model.easy_transformer
+    #     ).to(accelerator.device)
+    #     ignore_prefix_tokens = False
+    # else:
+    #     assert "showo" in config.model
+    #     model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
+    #     ignore_prefix_tokens = True
 
-    mask_id = model.config.mask_token_id
+    mask_id = config.model.tokenize.vocab_size - 1
 
     ##################################
     #   Optimizer and LR scheduler   #
@@ -756,9 +759,7 @@ def save_checkpoint(model, config, accelerator, global_step):
 
 
 def log_grad_norm(model, accelerator, global_step):
-    accelerator.print(model.named_parameters())
     for name, param in model.named_parameters():
-        accelerator.print(name, param.grad)
         if param.grad is not None:
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
