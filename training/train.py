@@ -228,6 +228,7 @@ def main():
     # Initialize model
     model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
     ignore_prefix_tokens = False
+
     # if "easy_transformer" in config.model:
     #     model = EasyTransformer(
     #         vocab_size=config.model.tokenize.vocab_size,
@@ -410,9 +411,25 @@ def main():
     data_time_m = AverageMeter()
     end = time.time()
 
+
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
-        for batch, batch_idx, dataloader_idx in combined_dataloader:
+
+        # Set up iterator alias based on overfit_one_batch config
+        if config.training.get("overfit_one_batch", False):
+            # Get the first batch
+            first_batch_data = next(iter(combined_dataloader))
+            # Create an infinite iterator that yields the same batch
+            def overfit_iterator():
+                while True:
+                    yield first_batch_data
+            data_iterator = overfit_iterator()
+            logger.info("Overfitting on one batch - using single batch iterator")
+        else:
+            # Use the normal combined dataloader
+            data_iterator = combined_dataloader
+
+        for batch, batch_idx, dataloader_idx in data_iterator:
 
             # Debug logging - save images and text info for first iteration on main process
             if global_step % config.experiment.generate_every and accelerator.is_main_process:

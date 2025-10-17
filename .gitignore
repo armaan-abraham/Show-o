@@ -5,3 +5,4 @@ input_ids*.pt
 show-o-training-stage1/*
 train-easy-lg/*
 train-easy/*
+runs/*

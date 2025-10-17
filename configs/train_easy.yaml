@@ -5,8 +5,8 @@ wandb:
 
 experiment:
     project: "training"
-    name: "train-easy"
-    output_dir: "train-easy"
+    name: "easy"
+    output_dir: "runs/easy"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
     save_every: 10000
@@ -33,12 +33,12 @@ model:
         
         image_len: 256
 
-        num_layers_input: 1
-        num_layers_output: 1
-        d_model: 64
-        d_mlp: 256
+        num_layers_input: 3
+        num_layers_output: 3
+        d_model: 128
+        d_mlp: 512
 
-        num_heads: 2
+        num_heads: 4
 
         dtype: bf16
 
@@ -69,7 +69,7 @@ dataset:
 optimizer:
     name: adamw
     params: # default adamw params
-        learning_rate: 1e-4
+        learning_rate: 5e-4
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
@@ -80,7 +80,7 @@ lr_scheduler:
     scheduler: "cosine"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 5000
+        warmup_steps: 500
 
 training:
     gradient_accumulation_steps: 1

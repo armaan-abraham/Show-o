@@ -4,9 +4,9 @@
 #SBATCH --account=iris
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1 
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:a40:4
-#SBATCH --time=04:00:00
+#SBATCH --time=10:00:00
 #SBATCH --output=/iris/u/armaana/jobs/logs/%x_%j.out
 #SBATCH --error=/iris/u/armaana/jobs/logs/%x_%j.err
 
@@ -20,10 +20,10 @@ cd /iris/u/armaana/Show-o-base/Show-o
 . .venv/bin/activate
 
 # We could check nproc but CPU isolation sometimes messes with this I think
-export NUM_DATALOADER_WORKERS=64
+export NUM_DATALOADER_WORKERS=32
 
 # Your commands here
 echo "Starting job"
-PYTHONPATH=/iris/u/armaana/Show-o-base/Show-o/training:$PYTHONPATH accelerate launch --config_file accelerate_configs/multi_gpu_deepspeed_zero2.yaml training/train.py config=configs/train_easy_lg.yaml
+PYTHONPATH=/iris/u/armaana/Show-o-base/Show-o/training:$PYTHONPATH accelerate launch --config_file accelerate_configs/multi_gpu_deepspeed_zero2.yaml training/train.py config=configs/train_easy.yaml
 
 echo "Job finished at: $(date)"
