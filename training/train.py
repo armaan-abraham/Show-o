@@ -226,20 +226,19 @@ def main():
     vq_model.eval()
     vq_model.requires_grad_(False)
 
-    # Initialize model
-    model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
-    ignore_prefix_tokens = False
-
-    # if "easy_transformer" in config.model:
-    #     model = EasyTransformer(
-    #         vocab_size=config.model.tokenize.vocab_size,
-    #         **config.model.easy_transformer
-    #     ).to(accelerator.device)
-    #     ignore_prefix_tokens = False
-    # else:
-    #     assert "showo" in config.model
-    #     model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
-    #     ignore_prefix_tokens = True
+    if "easy_transformer" in config.model:
+        if config.model.easy_transformer.get("vanilla"):
+            model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
+        else:
+            model = EasyTransformer(
+                vocab_size=config.model.tokenize.vocab_size,
+                **config.model.easy_transformer
+            ).to(accelerator.device)
+        ignore_prefix_tokens = False
+    else:
+        assert "showo" in config.model
+        model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
+        ignore_prefix_tokens = True
 
     mask_id = config.model.tokenize.vocab_size - 1
 
