@@ -1,33 +1,40 @@
-import os
-import json
-import glob
-import collections
-import torch
+import os, json, glob, collections, torch
+from torch.utils.data import IterableDataset, get_worker_info
 
-
-class C4Dataset(torch.utils.data.IterableDataset):
+class C4Dataset(IterableDataset):
     def __init__(self, path, max_length=8000):
         self.path = path
         self.max_length = max_length
 
-    def __iter__(self):
-        # Get worker info
-        worker_info = torch.utils.data.get_worker_info()
+    def _rank_world(self):
+        # Try torch.distributed first (works with Accelerate)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return torch.distributed.get_rank(), torch.distributed.get_world_size()
+        # Fallback to env vars set by many launchers (incl. accelerate)
+        rank = int(os.environ.get("RANK", "0"))
+        world = int(os.environ.get("WORLD_SIZE", "1"))
+        return rank, world
 
-        # Find all json files in the directory
+    def _shard_files(self, files):
+        # 1) shard by process rank (GPUs)
+        rank, world = self._rank_world()
+        files = files[rank::world]
+
+        # 2) shard by DataLoader worker within this process
+        wi = get_worker_info()
+        if wi is not None and wi.num_workers > 1:
+            files = files[wi.id::wi.num_workers]
+        return files
+
+    def __iter__(self):
+        # Enumerate files once per worker
         file_pattern = os.path.join(self.path, '**', '*.json')
         files = sorted(glob.glob(file_pattern, recursive=True))
 
-        # Partition files among workers
-        if worker_info is not None:
-            # Multiple workers: split files among them
-            worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-            files = files[worker_id::num_workers]  # Each worker gets every Nth file
+        files = self._shard_files(files)
 
-        # Iterate through this worker's assigned files
-        for file_path in files:
-            with open(file_path, 'r') as f:
+        for fp in files:
+            with open(fp, 'r') as f:
                 for line in f:
                     data = json.loads(line)
                     text = data['text'][:self.max_length]
