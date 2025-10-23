@@ -5,8 +5,8 @@ wandb:
 
 experiment:
     project: "training"
-    name: "easy"
-    output_dir: "runs/easy"
+    name: "vanilla"
+    output_dir: "runs/vanilla"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
     save_every: 10000
@@ -28,7 +28,7 @@ model:
         num_new_special_tokens: 10  # <|soi|> <|eoi|> <|sov|> <|eov|> <|t2i|> <|mmu|> <|t2v|> <|v2v|> <|lvg|> <|pad|>
         llm_vocab_size: 50295
 
-    vanilla: False
+    vanilla: True
 
     easy_transformer:
 

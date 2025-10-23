@@ -227,7 +227,7 @@ def main():
     vq_model.requires_grad_(False)
 
     if "easy_transformer" in config.model:
-        if config.model.easy_transformer.get("vanilla"):
+        if config.model.get("vanilla"):
             model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
         else:
             model = EasyTransformer(
