@@ -58,6 +58,7 @@ from llava.llava_data_vq_unified import get_instruct_data_loader
 SYSTEM_PROMPT_LEN = 28
 
 from training.utils import get_config, flatten_omega_conf, AverageMeter
+import tempfile
 
 try:
     import apex
@@ -550,6 +551,7 @@ def main():
                         entropy_mmu = compute_average_entropy(logits_mmu, labels_mmu, uni_prompting.ignore_id)
 
                     logs = {
+                        "loss": loss.item(),
                         "step_loss_t2i": avg_loss_t2i.item(),
                         "step_loss_mmu": avg_loss_mmu.item(),
                         "step_loss_lm": avg_loss_lm.item(),
@@ -566,6 +568,7 @@ def main():
 
                     logger.info(
                         f"Step: {global_step + 1} "
+                        f"Loss: {loss.item()}, "
                         f"Loss_t2i: {avg_loss_t2i.item():0.4f} "
                         f"Loss_mmu: {avg_loss_mmu.item():0.4f} "
                         f"Loss_lm: {avg_loss_lm.item():0.4f} "
@@ -597,6 +600,10 @@ def main():
                         batch["t2i_flow"]["images"],
                         texts,
                         logits,
+                        batch_size_lm,
+                        texts_lm,
+                        labels,
+                        tokenizer,
                     )
 
                 global_step += 1
@@ -631,6 +638,10 @@ def visualize_predictions(
         ori_images,
         texts,
         logits,
+        batch_size_lm,
+        texts_lm,
+        labels,
+        tokenizer,
 ):
     """
     Visualize predictions by showing original images, VQ reconstructed images, and model predictions side by side.
@@ -696,6 +707,64 @@ def visualize_predictions(
     # Log images to wandb
     wandb_images = [wandb.Image(image, caption=texts[i]) for i, image in enumerate(pil_images)]
     wandb.log({"Original images v.s. Reconstructed images v.s. Predicted images": wandb_images}, step=global_step)
+
+    # Process language modeling predictions
+    batch_size_t2i = config.training.batch_size_t2i
+
+    # Extract LM portion of logits, labels, and input_ids
+    logits_lm = logits[batch_size_t2i:batch_size_t2i + batch_size_lm]
+    labels_lm = labels[batch_size_t2i:batch_size_t2i + batch_size_lm]
+    input_ids_lm = input_ids[batch_size_t2i:batch_size_t2i + batch_size_lm]
+
+    # Get predicted tokens by taking argmax
+    predicted_tokens_lm = logits_lm.argmax(dim=-1)
+
+    # Get pad token ID
+    pad_id = int(uni_prompting.sptids_dict['<|pad|>'])
+
+    # Create wandb Table for LM predictions
+    # Aggregate up to 8 LM samples and save as a text artifact
+    artifact = wandb.Artifact(name=f"lm_predictions_{global_step}", type="predictions",
+                              metadata={"global_step": global_step})
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "lm_predictions.txt")
+        with open(out_path, "w", encoding="utf-8") as f:
+            for i in range(batch_size_lm):
+                # Get ground truth tokens and input tokens
+                gt_tokens = labels_lm[i]
+                pred_tokens = predicted_tokens_lm[i]
+                inp_tokens = input_ids_lm[i]
+
+                # Mask to identify non-pad tokens in input
+                valid_mask = inp_tokens != pad_id
+
+                # Get valid ground truth and predicted tokens as Python lists
+                valid_gt_tokens = gt_tokens[valid_mask].cpu().tolist()
+                valid_pred_tokens = pred_tokens[valid_mask].cpu().tolist()
+
+                # Decode to text
+                gt_text = tokenizer.decode(valid_gt_tokens, skip_special_tokens=False)
+                pred_text = tokenizer.decode(valid_pred_tokens, skip_special_tokens=False)
+
+                # Calculate token-level accuracy
+                if len(valid_gt_tokens) > 0:
+                    correct_tokens = sum(1 for a, b in zip(valid_gt_tokens, valid_pred_tokens) if a == b)
+                    total_tokens = len(valid_gt_tokens)
+                    accuracy = correct_tokens / total_tokens
+                else:
+                    correct_tokens = 0
+                    total_tokens = 0
+                    accuracy = 0.0
+
+                # Write sample to file
+                f.write(f"Sample {i}\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"Ground Truth (truncated to 500 chars):\n{gt_text}\n\n")
+                f.write(f"Predicted (truncated to 500 chars):\n{pred_text}\n\n")
+                f.write(f"Token Accuracy: {accuracy:.2%} ({correct_tokens}/{total_tokens})\n\n\n")
+
+        artifact.add_file(out_path)
+        wandb.log_artifact(artifact)
 
     model.train()
 
