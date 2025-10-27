@@ -9,11 +9,11 @@ experiment:
     output_dir: "runs/easy"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
-    save_every: 10000
+    save_every: 200
     eval_every: 2500
-    generate_every: 500
-    log_every: 50
-    log_grad_norm_every: 50
+    generate_every: 200
+    log_every: 10
+    log_grad_norm_every: 10
     resume_from_checkpoint: False
 
 model:
@@ -36,12 +36,12 @@ model:
         
         image_len: 256
 
-        num_layers_input: 3
-        num_layers_output: 3
-        d_model: 128
-        d_mlp: 512
+        num_layers_input: 1
+        num_layers_output: 1
+        d_model: 64
+        d_mlp: 256
 
-        num_heads: 4
+        num_heads: 2
 
         dtype: bf16
 
@@ -72,7 +72,7 @@ dataset:
 optimizer:
     name: adamw
     params: # default adamw params
-        learning_rate: 5e-4
+        learning_rate: 5e-3
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
@@ -102,5 +102,5 @@ training:
     max_grad_norm: 1.0
     guidance_scale: 0.0
     t2i_coeff: 1.0
-    lm_coeff: 0.05
+    lm_coeff: 0.2
     mmu_coeff: 1.0
