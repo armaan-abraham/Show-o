@@ -204,6 +204,7 @@ def main():
 
     logger.info(f"{num_dataloader_workers=}")
     logger.info(f"{total_batch_size=}")
+    logger.info(__file__)
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.

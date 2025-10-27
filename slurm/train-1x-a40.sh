@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=easy-train
-#SBATCH --partition=iris
+#SBATCH --job-name=train
+#SBATCH --partition=iris-hi
 #SBATCH --account=iris
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1 
@@ -16,14 +16,14 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "GPUs: $CUDA_VISIBLE_DEVICES"
 
-cd /iris/u/armaana/Show-o-base/Show-o
-. .venv/bin/activate
+. /iris/u/armaana/Show-o-base/Show-o/.venv/bin/activate
+cd /iris/u/armaana/Show-o-base/2
 
 # We could check nproc but CPU isolation sometimes messes with this I think
 export NUM_DATALOADER_WORKERS=16
 
 # Your commands here
 echo "Starting job"
-PYTHONPATH=/iris/u/armaana/Show-o-base/Show-o/training:$PYTHONPATH accelerate launch --config_file accelerate_configs/1_gpu.yaml training/train.py config=configs/train_easy.yaml
+PYTHONPATH=/iris/u/armaana/Show-o-base/2/training:$PYTHONPATH accelerate launch --config_file accelerate_configs/1_gpu.yaml training/train.py config=configs/train_easy.yaml
 
 echo "Job finished at: $(date)"
