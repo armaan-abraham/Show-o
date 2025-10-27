@@ -459,9 +459,6 @@ def main():
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
                 input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i', ignore_prefix_tokens=ignore_prefix_tokens)
-                torch.save(input_ids, "input_ids_t2i.pt")
-                torch.save(labels, "labels_t2i.pt")
-                print("SAVED")
 
                 data_t2i_time_m.update(time.time() - end)
                 end = time.time()
