@@ -82,8 +82,7 @@ def compute_average_entropy(logits, labels, ignore_id):
     Returns:
         Average entropy value as a float
     """
-    # Create mask for non-ignore tokens
-    non_ignore_mask = (labels != ignore_id)
+
 
     # Compute probabilities from logits
     probs = F.softmax(logits, dim=-1)
@@ -91,49 +90,15 @@ def compute_average_entropy(logits, labels, ignore_id):
     log_probs = torch.log(probs)
     entropy = -(probs * log_probs).sum(dim=-1)
 
-    # Apply mask and compute average
-    masked_entropy = entropy * non_ignore_mask.float()
+    
+    non_ignore_mask = (labels != ignore_id)
+    
+    masked_entropy = torch.where(
+        non_ignore_mask,
+        entropy,
+        0,
+    )
     avg_entropy = masked_entropy.sum() / non_ignore_mask.sum()
-
-    # Check for NaNs in the entropy
-    if torch.isnan(avg_entropy) or torch.isnan(entropy).any():
-        print("=" * 80)
-        print("NaN detected in compute_average_entropy!")
-        print("=" * 80)
-
-        # Find positions of NaNs in entropy
-        nan_mask = torch.isnan(entropy)
-        nan_positions = nan_mask.nonzero(as_tuple=False)
-
-        print(f"Number of NaN positions: {nan_positions.shape[0]}")
-        print(f"NaN positions (batch_idx, seq_idx):\n{nan_positions}")
-
-        # Get labels at NaN positions
-        if nan_positions.shape[0] > 0:
-            print(f"\nLabels at NaN positions:")
-            for pos in nan_positions:
-                batch_idx, seq_idx = pos[0].item(), pos[1].item()
-                label_val = labels[batch_idx, seq_idx].item()
-                print(f"  Position [{batch_idx}, {seq_idx}]: label = {label_val}")
-
-        # Save logits and labels to disk
-        timestamp = time.time()
-        save_dir = "nan_debug"
-        os.makedirs(save_dir, exist_ok=True)
-
-        logits_path = os.path.join(save_dir, f"logits_nan_{timestamp}.pt")
-        labels_path = os.path.join(save_dir, f"labels_nan_{timestamp}.pt")
-        entropy_path = os.path.join(save_dir, f"entropy_nan_{timestamp}.pt")
-
-        torch.save(logits, logits_path)
-        torch.save(labels, labels_path)
-        torch.save(entropy, entropy_path)
-
-        print(f"\nSaved debugging tensors:")
-        print(f"  Logits: {logits_path}")
-        print(f"  Labels: {labels_path}")
-        print(f"  Entropy: {entropy_path}")
-        print("=" * 80)
 
     return avg_entropy.item()
 
@@ -494,6 +459,9 @@ def main():
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
                 input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i', ignore_prefix_tokens=ignore_prefix_tokens)
+                torch.save(input_ids, "input_ids_t2i.pt")
+                torch.save(labels, "labels_t2i.pt")
+                print("SAVED")
 
                 data_t2i_time_m.update(time.time() - end)
                 end = time.time()
