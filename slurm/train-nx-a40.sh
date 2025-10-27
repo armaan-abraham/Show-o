@@ -17,8 +17,7 @@ echo "Node: $SLURM_NODELIST"
 echo "GPUs: $CUDA_VISIBLE_DEVICES"
 
 # Get the parent directory of this script
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PARENT_DIR=/iris/u/armaana/Show-o-base/4
 
 . /iris/u/armaana/Show-o-base/Show-o/.venv/bin/activate
 cd "$PARENT_DIR"
