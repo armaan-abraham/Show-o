@@ -11,7 +11,7 @@ experiment:
     max_train_examples_mmu: 40000000
     save_every: 10000
     eval_every: 2500
-    generate_every: 1000
+    generate_every: 500
     log_every: 50
     log_grad_norm_every: 50
     resume_from_checkpoint: False
@@ -102,5 +102,5 @@ training:
     max_grad_norm: 1.0
     guidance_scale: 0.0
     t2i_coeff: 1.0
-    lm_coeff: 1.0
+    lm_coeff: 0.05
     mmu_coeff: 1.0

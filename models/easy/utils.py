@@ -159,6 +159,7 @@ if __name__ == "__main__":
     print(indexes)
     print("Grouping")
     print(grouping)
+    print(grouping.unique())
     # print(create_image_token_ordering(16))
     print("Input-output interface mask")
     print(get_io_interface_mask(grouping.unsqueeze(0)).int())

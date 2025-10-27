@@ -321,7 +321,7 @@ def main():
 
     train_dataloader_t2i = DataLoader(dataset_imagenet, batch_size=config.training.batch_size_t2i,
                                     sampler=sampler, collate_fn=dataset_imagenet.collate_fn,
-                                    shuffle=shuffle, num_workers=num_dataloader_workers)
+                                    shuffle=shuffle, num_workers=num_dataloader_workers, prefetch_factor=8)
     num_update_steps_per_epoch = math.ceil(len(dataset_imagenet) / total_batch_size_t2i)
     num_train_epochs = math.ceil(config.training.max_train_steps / num_update_steps_per_epoch)
     logger.info("Done t2i loader")
@@ -408,7 +408,9 @@ def main():
     logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
 
     batch_time_m = AverageMeter()
-    data_time_m = AverageMeter()
+    data_lm_time_m = AverageMeter()
+    data_t2i_time_m = AverageMeter()
+    data_mmu_time_m = AverageMeter()
     end = time.time()
 
 
@@ -446,12 +448,14 @@ def main():
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 pixel_values, texts = batch["t2i_flow"]["images"], batch["t2i_flow"]["input_ids"]
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-                data_time_m.update(time.time() - end)
 
                 # Encode images to image tokens and create input and labels
                 image_tokens = vq_model.get_code(pixel_values)
                 image_tokens = image_tokens + len(uni_prompting.text_tokenizer)
                 input_ids, masks, labels = uni_prompting((texts, image_tokens, image_tokens), 't2i', ignore_prefix_tokens=ignore_prefix_tokens)
+
+                data_t2i_time_m.update(time.time() - end)
+                end = time.time()
 
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 # Build formatted sequences for language modeling
@@ -460,6 +464,9 @@ def main():
                 input_ids_lm, _, labels_lm = uni_prompting((texts_lm, input_ids.shape[-1]), 'lm', ignore_prefix_tokens=ignore_prefix_tokens)
                 input_ids = torch.cat((input_ids, input_ids_lm.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_lm.to(input_ids.device)), dim=0)
+
+                data_lm_time_m.update(time.time() - end)
+                end = time.time()
 
                 # *-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*-------*
                 # Build formatted sequences for captioning/multimodal understanding
@@ -474,6 +481,9 @@ def main():
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
                 assert input_ids.shape[1] <= config.model.easy_transformer.max_seq_len
+
+                data_mmu_time_m.update(time.time() - end)
+                end = time.time()
 
             with accelerator.accumulate(model):
                 logits, loss_t2i, loss_lm, loss_mmu = model(
@@ -559,7 +569,9 @@ def main():
                         "entropy_mmu": entropy_mmu,
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
-                        "data_time": data_time_m.val,
+                        "data_t2i_time": data_t2i_time_m.val,
+                        "data_lm_time": data_lm_time_m.val,
+                        "data_mmu_time": data_mmu_time_m.val,
                         "batch_time": batch_time_m.val,
                         "ignore_fraction": ignore_fraction,
                     }
@@ -574,14 +586,18 @@ def main():
                         f"Entropy_t2i: {entropy_t2i:0.4f} "
                         f"Entropy_lm: {entropy_lm:0.4f} "
                         f"Entropy_mmu: {entropy_mmu:0.4f} "
-                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
+                        f"Data t2i (t): {data_t2i_time_m.val:0.4f}"
+                        f"Data lm (t): {data_lm_time_m.val:0.4f}"
+                        f"Data mmu (t): {data_mmu_time_m.val:0.4f}"
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
 
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
-                    data_time_m.reset()
+                    data_t2i_time_m.reset()
+                    data_lm_time_m.reset()
+                    data_mmu_time_m.reset()
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
@@ -722,7 +738,6 @@ def visualize_predictions(
     pad_id = int(uni_prompting.sptids_dict['<|pad|>'])
 
     # Create wandb Table for LM predictions
-    # Aggregate up to 8 LM samples and save as a text artifact
     artifact = wandb.Artifact(name=f"lm_predictions_{global_step}", type="predictions",
                               metadata={"global_step": global_step})
     with tempfile.TemporaryDirectory() as tmpdir:

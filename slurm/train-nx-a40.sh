@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=easy-train
+#SBATCH --job-name=train
 #SBATCH --partition=iris-hi
 #SBATCH --account=iris
 #SBATCH --nodes=1
