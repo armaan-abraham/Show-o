@@ -36,8 +36,20 @@ class UniversalPrompting():
         self.ignore_id = ignore_id
         self.cond_dropout_prob = cond_dropout_prob
 
-    def t2i_prompt(self, text_ids, image_ids, labels):
+    def t2i_prompt(self, text_ids, image_ids, labels, ignore_prefix_tokens=True):
+        """
+        Construct prompt for text-to-image generation task.
 
+        Args:
+            text_ids: Text token IDs
+            image_ids: Image token IDs
+            labels: Image label IDs
+            ignore_prefix_tokens: If True (default), ignore task token, text tokens, and their special tokens
+                                  in labels. If False, include them for prediction.
+
+        Returns:
+            Tuple of (input_ids, attention_masks, labels)
+        """
         device = image_ids.device
         sequence_ids = []
         attention_masks = []
@@ -68,14 +80,24 @@ class UniversalPrompting():
             num_pad_tokens = self.max_text_len - text_len
 
             # prompting -- [task token] [sot] [text tokens] [eot] [soi] [image tokens] [eoi] [pad tokens]
-            temp_label_ids = torch.cat([
-                # should we predict text tokens when doing image reconstruction?
-                torch.tensor(temp_ids).to(device),
-                self.sptids_dict['<|soi|>'].to(device),
-                labels[i],
-                self.sptids_dict['<|eoi|>'].to(device),
-                torch.tensor([self.pad_id] * num_pad_tokens).to(device)
-            ], dim=0)
+            if ignore_prefix_tokens:
+                # Default behavior: ignore text tokens and predict only image tokens
+                temp_label_ids = torch.cat([
+                    torch.ones(text_len, dtype=torch.long) * self.ignore_id,  # text tokens ignored
+                    self.sptids_dict['<|soi|>'].to(device),
+                    labels[i],
+                    self.sptids_dict['<|eoi|>'].to(device),
+                    torch.tensor([self.pad_id] * num_pad_tokens).to(device)
+                ], dim=0)
+            else:
+                # Include text tokens in labels for prediction
+                temp_label_ids = torch.cat([
+                    torch.tensor(temp_ids).to(device),
+                    self.sptids_dict['<|soi|>'].to(device),
+                    labels[i],
+                    self.sptids_dict['<|eoi|>'].to(device),
+                    torch.tensor([self.pad_id] * num_pad_tokens).to(device)
+                ], dim=0)
 
             temp_label_ids = torch.where(temp_label_ids == self.pad_id, self.ignore_id, temp_label_ids)
 
@@ -433,12 +455,13 @@ class UniversalPrompting():
         """
         input (tuple) : data pairs contain text(str), image(tensor), or videos(tensor).
         task (str) : a flag indicates the current task.
-        ignore_prefix_tokens (bool) : for mmu task, whether to ignore prefix tokens in labels.
+        ignore_prefix_tokens (bool) : for t2i and mmu tasks, whether to ignore prefix tokens in labels.
+                                      For t2i: ignores text tokens. For mmu: ignores image tokens.
         """
         if task == "t2i":
             text_ids = self.text_tokenizer(input[0])['input_ids']  # (B, max_len)
             image_ids = input[1]  # (B, #tokens)
-            sequence_ids_with_masks = self.t2i_prompt(text_ids, image_ids, input[2])
+            sequence_ids_with_masks = self.t2i_prompt(text_ids, image_ids, input[2], ignore_prefix_tokens=ignore_prefix_tokens)
 
         elif task == "t2v":
             text_ids = self.text_tokenizer(input[0])['input_ids']  # (B, max_len)
@@ -449,7 +472,7 @@ class UniversalPrompting():
             text_ids = self.text_tokenizer(input[0])['input_ids']  # (B, max_len)
             image_ids = input[1]  # (B, #tokens)
             sequence_ids_with_masks = self.t2i_prompt(text_ids[:config.training.batch_size], image_ids,
-                                                                   input[2])
+                                                                   input[2], ignore_prefix_tokens=ignore_prefix_tokens)
             sequence_ids_with_masks_lm = self.lm_prompt(text_ids[config.training.batch_size:], input[3])
             return sequence_ids_with_masks, sequence_ids_with_masks_lm
 
