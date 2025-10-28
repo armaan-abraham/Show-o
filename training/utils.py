@@ -101,17 +101,15 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
     first_row = unified_input_ids[0]
     soi_idx = (first_row == soi_id).nonzero(as_tuple=True)[0][0].item()
     eoi_idx = (first_row == eoi_id).nonzero(as_tuple=True)[0][0].item()
-    num_image_tokens = eoi_idx - soi_idx - 1  # tokens between soi and eoi (exclusive)
+    num_image_tokens = eoi_idx - soi_idx - 1
 
-    # Find starting index of images in each row (vectorized)
-    # Find soi token positions and increment by 1 to get first image token position
+    # Find starting index of images in each row
     soi_positions = (unified_input_ids == soi_id).long().argmax(dim=1)
     image_start_indices = soi_positions + 1  # [B]
 
     # Sample masking probabilities
-    # Sample a random timestep for each image
+    # Sample a random timestep for each image and use provided masking schedule
     timesteps = torch.rand(batch_size, device=device)
-    # Sample a random mask probability for each image using timestep and cosine schedule
     mask_prob = mask_schedule(timesteps)
     mask_prob = mask_prob.clip(config.training.min_masking_rate)
 
@@ -123,7 +121,7 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
     # Create random permutation for image tokens only
     perm = torch.rand(batch_size, num_image_tokens, device=device).argsort(dim=-1)  # [B, S]
 
-    # Select positions where permutation value < num_token_masked (consistent with original implementation)
+    # Select positions where permutation value < num_token_masked
     mask = perm < num_token_masked.unsqueeze(-1)  # [B, S]
 
     # Get indices where mask is True
@@ -140,7 +138,7 @@ def mask_or_random_replace_tokens(unified_input_ids, unified_labels, mask_id, so
     assert config.training["noise_type"] == "mask"
     masked_input_ids.index_put_((row_idx, unified_col_idx), torch.full_like(row_idx, int(mask_id)))
 
-    # Create mask for all image token positions (True = ignore, False = predict) - vectorized
+    # Create mask for all image token positions (True = ignore, False = predict)
     positions = torch.arange(total_seq_len, device=device).unsqueeze(0)  # [1, L]
     start_indices = image_start_indices.unsqueeze(1)  # [B, 1]
     end_indices = start_indices + num_image_tokens  # [B, 1]
