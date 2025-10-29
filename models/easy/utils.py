@@ -70,6 +70,21 @@ def get_index_and_grouping(dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, 
             
     return torch.tensor(indexes), torch.tensor(grouping)
 
+def get_index_and_grouping_linear(num_groups: int, dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, "token"]]:
+    num_tokens = dim ** 2
+    token_idx = torch.arange(num_tokens)
+    # We are not reordering in this case, just creating inference groups of a
+    # fixed size
+    assert num_tokens % num_groups == 0
+    tokens_per_group = int(num_tokens / num_groups)
+    inference_groups = repeat(
+        torch.arange(num_groups),
+        "group -> (group token)",
+        token=tokens_per_group
+    )
+    return token_idx, inference_groups
+
+
 def get_io_interface_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "batch seq seq"]:
     groups_i = inference_groups.unsqueeze(2)
     groups_j = inference_groups.unsqueeze(1)
@@ -153,14 +168,27 @@ if __name__ == "__main__":
         print("Level")
         print(level_results)
 
-    indexes, grouping = get_index_and_grouping(16)
+    indexes, grouping = get_index_and_grouping(4)
+    print("== Log ==")
     print("Indexes")
     print(len(indexes))
     print(indexes)
     print("Grouping")
     print(grouping)
     print(grouping.unique())
-    # print(create_image_token_ordering(16))
+    print("Input-output interface mask")
+    print(get_io_interface_mask(grouping.unsqueeze(0)).int())
+    print("Attention mask")
+    print(get_attn_mask(grouping.unsqueeze(0)).int())
+
+    indexes, grouping = get_index_and_grouping_linear(4, 4)
+    print("== Linear ==")
+    print("Indexes")
+    print(len(indexes))
+    print(indexes)
+    print("Grouping")
+    print(grouping)
+    print(grouping.unique())
     print("Input-output interface mask")
     print(get_io_interface_mask(grouping.unsqueeze(0)).int())
     print("Attention mask")
