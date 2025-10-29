@@ -232,18 +232,18 @@ def main():
     vq_model.eval()
     vq_model.requires_grad_(False)
 
-    if "easy_transformer" in config.model:
-        if config.model.get("vanilla"):
-            model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.easy_transformer).to(accelerator.device)
-        else:
-            model = EasyTransformer(
-                vocab_size=config.model.tokenize.vocab_size,
-                **config.model.easy_transformer
-            ).to(accelerator.device)
+    if config.model.type == "vanilla":
+        model = TransformerForShowo(vocab_size=config.model.tokenize.vocab_size, **config.model.core).to(accelerator.device)
+        ignore_prefix_tokens = False
+    elif config.model.type == "easy":
+        model = EasyTransformer(
+            vocab_size=config.model.tokenize.vocab_size,
+            **config.model.core
+        ).to(accelerator.device)
         ignore_prefix_tokens = False
     else:
-        assert "showo" in config.model
-        model = Showo(accelerator=accelerator, **config.model.showo).to(accelerator.device)
+        assert config.model.type == "showo"
+        model = Showo(vocab_size=config.model.tokenize.vocab_size, accelerator=accelerator, **config.model.core).to(accelerator.device)
         ignore_prefix_tokens = True
 
     mask_id = config.model.tokenize.vocab_size - 1
@@ -486,7 +486,7 @@ def main():
                 input_ids = torch.cat((input_ids, input_ids_mmu.to(input_ids.device)), dim=0)
                 labels = torch.cat((labels, labels_mmu.to(input_ids.device)), dim=0)
 
-                assert input_ids.shape[1] <= config.model.easy_transformer.max_seq_len
+                assert input_ids.shape[1] <= config.model.core.max_seq_len
 
                 data_mmu_time_m.update(time.time() - end)
                 end = time.time()
@@ -506,6 +506,7 @@ def main():
                     eoi_id=int(uni_prompting.sptids_dict['<|eoi|>']),
                     mask_schedule=mask_schedule,
                     ignore_id=uni_prompting.ignore_id,
+                    config=config,
                 )
 
                 # Gather the losses across all processes for logging (if we use distributed training).

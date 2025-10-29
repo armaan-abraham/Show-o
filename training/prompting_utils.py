@@ -83,7 +83,7 @@ class UniversalPrompting():
             if ignore_prefix_tokens:
                 # Default behavior: ignore text tokens and predict only image tokens
                 temp_label_ids = torch.cat([
-                    torch.ones(text_len, dtype=torch.long) * self.ignore_id,  # text tokens ignored
+                    torch.ones(text_len, dtype=torch.long, device=device) * self.ignore_id,  # text tokens ignored
                     self.sptids_dict['<|soi|>'].to(device),
                     labels[i],
                     self.sptids_dict['<|eoi|>'].to(device),

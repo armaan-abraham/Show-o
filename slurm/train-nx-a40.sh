@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=train
-#SBATCH --partition=iris-hi
+#SBATCH --partition=iris
 #SBATCH --account=iris
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1 
@@ -17,7 +17,7 @@ echo "Node: $SLURM_NODELIST"
 echo "GPUs: $CUDA_VISIBLE_DEVICES"
 
 # Get the parent directory of this script
-PARENT_DIR=/iris/u/armaana/Show-o-base/4
+PARENT_DIR=/iris/u/armaana/Show-o-base/2
 
 . /iris/u/armaana/Show-o-base/Show-o/.venv/bin/activate
 cd "$PARENT_DIR"
