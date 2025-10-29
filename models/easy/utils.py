@@ -96,7 +96,7 @@ def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "b
     mask = key_groups <= query_groups
     return mask
     
-def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int) -> Tuple[Tuple[Int[Tensor, "batch 1"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
+def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int, img_reorder_idx_root: Int[Tensor, "seq"], img_inference_groups_root: Int[Tensor, "seq"]) -> Tuple[Tuple[Int[Tensor, "batch 1"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
     assert input_ids.dim() == 2
     # Assume single image per seq
     batch_size = input_ids.shape[0]
@@ -113,9 +113,8 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     assert torch.all(reduce(soi_idxs, "batch seq -> batch", "sum") == 1), "More than one soi token in a sequence"
     soi_idxs = soi_idxs.argmax(dim=1) + 1 # [B]
 
-    img_reorder_idx, img_inference_groups = get_index_and_grouping(int(math.sqrt(num_image_tokens)))
-    img_reorder_idx = img_reorder_idx.to(device)
-    img_inference_groups = img_inference_groups.to(device)
+    img_reorder_idx = img_reorder_idx_root.to(device)
+    img_inference_groups = img_inference_groups_root.to(device)
     # Repeat across the batch and add starting index of image for each row
     img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
     img_idx_ori = torch.arange(num_image_tokens, device=device).unsqueeze(0) + soi_idxs.unsqueeze(1)

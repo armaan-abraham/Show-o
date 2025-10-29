@@ -7,6 +7,7 @@ from ..base import TransformerBlock, dtype_str_to_torch
 from pathlib import Path
 from .utils import (
     get_index_and_grouping,
+    get_index_and_grouping_linear,
     get_io_interface_mask,
     reorder_and_group_token_batch,
     remove_pads_from_attn_mask,
@@ -32,6 +33,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         d_mlp: int,
         num_heads: int,
         dtype: str,
+        inference_grouping: dict,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -60,6 +62,16 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
         # Input-output interface
         self.input_k_transform = nn.Linear(d_model, d_model)
+
+        image_dim = int(image_len ** 0.5)
+        assert image_dim * image_dim == image_len
+        if inference_grouping["type"] == "recursive":
+            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping(image_dim)
+        elif inference_grouping["type"] == "linear":
+            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_linear(
+                inference_grouping["num_groups"],
+                image_dim,
+            )
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -170,14 +182,19 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                     soi_id,
                     eoi_id,
                     self.config.image_len,
+                    self.img_reorder_idx_root,
+                    self.img_inference_groups_root,
                 )
             )
+            # TODO: combine these into single call to reorder and group
             (reorder_idx_mmu_batch, reorder_idx_mmu_seq), inference_groups_mmu = (
                 reorder_and_group_token_batch(
                     input_ids[batch_size_t2i + batch_size_lm :],
                     soi_id,
                     eoi_id,
                     self.config.image_len,
+                    self.img_reorder_idx_root,
+                    self.img_inference_groups_root,
                 )
             )
             reorder_idx_lm_seq = repeat(

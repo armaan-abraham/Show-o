@@ -13,6 +13,7 @@ experiment:
     eval_every: 2500
     generate_every: 500
     log_every: 50
+    log_image_sample_loss_every: 5
     log_grad_norm_every: 50
     resume_from_checkpoint: False
 
@@ -28,9 +29,9 @@ model:
         num_new_special_tokens: 10  # <|soi|> <|eoi|> <|sov|> <|eov|> <|t2i|> <|mmu|> <|t2v|> <|v2v|> <|lvg|> <|pad|>
         llm_vocab_size: 50295
 
-    vanilla: True
+    type: "vanilla"
 
-    easy_transformer:
+    core:
 
         max_seq_len: 387
         

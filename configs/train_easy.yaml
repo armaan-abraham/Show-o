@@ -12,6 +12,7 @@ experiment:
     save_every: 10000
     eval_every: 2500
     generate_every: 500
+    log_image_sample_loss_every: 5
     log_every: 50
     log_grad_norm_every: 50
     resume_from_checkpoint: False
@@ -28,9 +29,12 @@ model:
         num_new_special_tokens: 10  # <|soi|> <|eoi|> <|sov|> <|eov|> <|t2i|> <|mmu|> <|t2v|> <|v2v|> <|lvg|> <|pad|>
         llm_vocab_size: 50295
 
-    vanilla: False
+    type: "easy"
 
-    easy_transformer:
+    core:
+        inference_grouping:
+            type: "linear"
+            num_groups: 128
 
         max_seq_len: 387
         
