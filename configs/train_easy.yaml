@@ -5,7 +5,7 @@ wandb:
 
 experiment:
     project: "training"
-    name: "easy"
+    name: "easy-multihead-io"
     output_dir: "runs/easy"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000

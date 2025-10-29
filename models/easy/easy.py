@@ -59,7 +59,15 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         self.unembed = nn.Linear(d_model, vocab_size)
 
         # Input-output interface
-        self.input_k_transform = nn.Linear(d_model, d_model)
+        self.io_W_k = nn.Parameter(torch.empty(num_heads, d_model, d_model))
+        nn.init.kaiming_uniform_(self.io_W_k)
+        self.io_b_k = nn.Parameter(torch.zeros(num_heads, d_model))
+
+        self.io_W_q = nn.Parameter(torch.empty(num_heads, d_model, d_model))
+        nn.init.kaiming_uniform_(self.io_W_q)
+        self.io_b_q = nn.Parameter(torch.zeros(num_heads, d_model))
+        
+        # Values for all heads are equal
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -94,27 +102,41 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             # Compute full attention weight matrix with initial output residual
             # streams as Q and final input residual streams (transformed) as K.
+            Q = einsum(
+                output_resid,
+                self.io_W_q,
+                "batch seq d_model, head d_model d_head -> batch seq head d_head"
+            ) + self.io_b_q
+
+            K = einsum(
+                resid,
+                self.io_W_k,
+                "batch seq d_model, head d_model d_head -> batch seq head d_head"
+            ) + self.io_b_k
+
             attn_weights = einsum(
-                output_resid, # Q
-                self.input_k_transform(resid), # K
-                "batch seq_q d_model, batch seq_k d_model -> batch seq_q seq_k"
+                Q,
+                K,
+                "batch seq_q head d_head, batch seq_k head d_head -> batch head seq_q seq_k"
             ) / seq_len ** 0.5 # scaling factor
 
             # Apply our attention mask
+            io_interface_mask_per_head = io_interface_mask.unsqueeze(1)
             attn_weights = torch.where(
                 # Leave attention weights in rows without any query positions in
                 # attention mask unchanged so we don't get NaNs in softmax. This
                 # is okay because we also set the attention weights for mask=0 to
                 # zero after the softmax.
-                io_interface_mask | ~reduce(io_interface_mask, "batch seq_q seq_k -> batch seq_q 1", "sum").bool(),
+                io_interface_mask_per_head | ~reduce(io_interface_mask_per_head, "batch 1 seq_q seq_k -> batch 1 seq_q 1", "sum").bool(),
                 attn_weights,
                 float("-inf"),
             )
 
+            # Softmax over keys
             attn_weights = torch.softmax(attn_weights, dim=-1)
 
             attn_weights = torch.where(
-                io_interface_mask,
+                io_interface_mask_per_head,
                 attn_weights,
                 0.0,
             )
@@ -124,8 +146,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             attn_result = einsum(
                 attn_weights, # QK
                 resid, # V
-                "batch seq_q seq_k, batch seq_k d_model -> batch seq_q d_model"
-            )
+                "batch head seq_q seq_k, batch seq_k d_model -> batch seq_q d_model"
+            ) / self.config.num_heads
 
             assert attn_result.shape == (batch_size, seq_len, self.config.d_model)
 
