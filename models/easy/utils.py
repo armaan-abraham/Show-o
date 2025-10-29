@@ -3,7 +3,7 @@ import torch
 from torch import Tensor
 from jaxtyping import Int, Bool, Float
 import math
-from einops import reduce, repeat
+from einops import reduce, repeat, rearrange
 
 Coord = Tuple[int, int]
 
@@ -72,17 +72,21 @@ def get_index_and_grouping(dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, 
 
 def get_index_and_grouping_linear(num_groups: int, dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, "token"]]:
     num_tokens = dim ** 2
-    token_idx = torch.arange(num_tokens)
-    # We are not reordering in this case, just creating inference groups of a
-    # fixed size
-    assert num_tokens % num_groups == 0
     tokens_per_group = int(num_tokens / num_groups)
+    assert num_tokens % num_groups == 0
+
+    reorder_idx = rearrange(
+        torch.arange(num_groups).unsqueeze(0) + torch.arange(tokens_per_group).unsqueeze(1) * num_groups,
+        "group token -> (token group)"
+    )
+    
+    
     inference_groups = repeat(
         torch.arange(num_groups),
         "group -> (group token)",
         token=tokens_per_group
     )
-    return token_idx, inference_groups
+    return reorder_idx, inference_groups
 
 
 def get_io_interface_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "batch seq seq"]:
@@ -180,7 +184,7 @@ if __name__ == "__main__":
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
 
-    indexes, grouping = get_index_and_grouping_linear(4, 4)
+    indexes, grouping = get_index_and_grouping_linear(8, 4)
     print("== Linear ==")
     print("Indexes")
     print(len(indexes))
@@ -229,7 +233,7 @@ if __name__ == "__main__":
     print("\nTest input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
-    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens)
+    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, *get_index_and_grouping(4))
     test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
     print("\nReordered input tensor:")
     print(test_input_reordered)
