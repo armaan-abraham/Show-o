@@ -11,8 +11,9 @@ experiment:
     max_train_examples_mmu: 40000000
     save_every: 10000
     eval_every: 2500
-    generate_every: 50
-    log_every: 10
+    generate_every: 500
+    log_image_sample_loss_every: 5
+    log_every: 5
     log_grad_norm_every: 10
     resume_from_checkpoint: False
 
@@ -30,6 +31,8 @@ model:
 
     type: "showo"
 
+    generation_timesteps: 15
+
     core:
         max_seq_len: 387
         
@@ -39,6 +42,7 @@ model:
         num_layers_output: 1
         d_model: 128
         d_mlp: 512
+
 
         num_heads: 2
 

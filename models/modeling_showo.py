@@ -22,9 +22,9 @@ from .sampling import cosine_schedule, mask_by_random_topk
 from .phi import PhiForCausalLM
 from .base import Transformer
 from pathlib import Path
-from training.utils import mask_or_random_replace_tokens
+from training.utils import mask_or_random_replace_tokens, get_image_pos
 from training.prompting_utils import create_attention_mask_predict_next, create_attention_mask_for_mmu
-from jaxtyping import Int
+from jaxtyping import Int, Float
 from einops import rearrange
 
 
@@ -89,6 +89,7 @@ class Showo(ModelMixin, ConfigMixin):
         """
         attention_masks = []
 
+
         # T2I attention mask
         if batch_size_t2i > 0:
             input_ids_t2i = input_ids[:batch_size_t2i]
@@ -98,8 +99,8 @@ class Showo(ModelMixin, ConfigMixin):
                 soi_id=soi_id,
                 eoi_id=eoi_id,
                 rm_pad_in_image=True,
-                return_inverse_mask=True
-            ).to(torch.bfloat16)
+                return_inverse_mask=False
+            )
             attention_masks.append(attention_mask_t2i)
 
         # LM attention mask
@@ -110,8 +111,8 @@ class Showo(ModelMixin, ConfigMixin):
                 pad_id=pad_id,
                 soi_id=soi_id,
                 eoi_id=eoi_id,
-                return_inverse_mask=True
-            ).to(torch.bfloat16)
+                return_inverse_mask=False
+            )
             attention_masks.append(attention_mask_lm)
 
         # MMU attention mask
@@ -120,8 +121,8 @@ class Showo(ModelMixin, ConfigMixin):
             attention_mask_mmu = create_attention_mask_for_mmu(
                 input_ids_mmu,
                 eoi_id=eoi_id,
-                return_inverse_mask=True
-            ).to(torch.bfloat16)
+                return_inverse_mask=False
+            )
             attention_masks.append(attention_mask_mmu)
 
         # Concatenate all attention masks
@@ -190,19 +191,16 @@ class Showo(ModelMixin, ConfigMixin):
 
         logits = self.model(input_ids=input_ids, attn_mask=attn_mask)
 
-        torch.save(input_ids, "input_ids.pt")
-        torch.save(labels, "labels.pt")
-        torch.save(attention_mask, "attention_mask.pt")
-
         if labels is not None:
             # 1. Mask token prediction (discrete diffusion) for image generation
             # Note that, max_seq_length indicates the maximum number of text tokens, maybe a bit confused.
 
             # Note that for masked image prediction, we assume that each
             # position generates a prediction at the same position, not the
-            # next. There are text tokens in these sequences, but these are set
-            # to ignore in the labels.
-            assert torch.all(labels[:batch_size_t2i][:, torch.argmax(labels[:batch_size_t2i] == -100) + 1] == soi_id)
+            # next. There are text tokens in these sequences, which conflicts
+            # with this, but these are set to ignore in the labels.
+            # Check that first token after ignores is soi
+            assert torch.all(labels[torch.arange(batch_size_t2i), torch.argmax((labels[:batch_size_t2i] != -100).int(), dim=1)] == soi_id)
             loss_t2i = F.cross_entropy(
                 logits[:batch_size_t2i].contiguous().view(-1, self.config.vocab_size),
                 labels[:batch_size_t2i].contiguous().view(-1), ignore_index=-100,
@@ -225,6 +223,7 @@ class Showo(ModelMixin, ConfigMixin):
 
         return logits
     
+    @torch.no_grad
     def predict_t2i_with_remask_and_labels(
         self,
         input_ids: Int[Tensor, "batch seq"],
@@ -244,18 +243,19 @@ class Showo(ModelMixin, ConfigMixin):
         Only returns predictions for the image tokens.
         """
         batch_size = input_ids.shape[0]
+        assert batch_size > 0
+        seq_len = input_ids.shape[1]
 
         mask_token_id = self.config.mask_token_id
         image_len_tokens = self.config.image_len
         assert input_ids.shape[1] > image_len_tokens
         num_new_special_tokens = config.model.tokenize.num_new_special_tokens
 
-        # Extract image tokens
-        image_start_idx = torch.argmax(input_ids == soi_id, dim=1) + 1
+        image_pos = get_image_pos(input_ids, soi_id, image_len_tokens)
 
         # Mask image tokens in full inputs tensor
         input_ids_masked = input_ids.clone()
-        input_ids_masked[:, image_start_idx : image_start_idx + image_len_tokens] = mask_token_id
+        input_ids_masked[image_pos] = mask_token_id
 
         # Create image logits tensor that we will iteratively fill in and return
         logits_image_all_iters = torch.empty(
@@ -264,7 +264,8 @@ class Showo(ModelMixin, ConfigMixin):
             device=input_ids.device
         )
 
-        attention_mask = self.assemble_attention_mask(
+
+        attn_mask = self.assemble_attention_mask(
             input_ids=input_ids,
             batch_size_t2i=batch_size,
             batch_size_lm=0,
@@ -276,12 +277,14 @@ class Showo(ModelMixin, ConfigMixin):
 
         for step in range(timesteps):
             # Run forward pass on entire sequence
-            logits = self(input_ids_masked, attention_mask=attention_mask)
-            logits_image = logits[:, image_start_idx : image_start_idx + image_len_tokens]
+            logits = self.model(input_ids=input_ids_masked, attn_mask=attn_mask)
+            assert logits.shape == (batch_size, seq_len, self.config.vocab_size)
+            logits_image = logits[image_pos]
 
             # Sample from image token distributions, just so that we can compute
             # the remasking tendency as the probability of the sampled token
             probs = logits_image.softmax(dim=-1)
+            assert probs.shape == logits_image.shape
             sampled_ids = torch.multinomial(
                 rearrange(probs, "batch seq d_vocab -> (batch seq) d_vocab"), 
                 1, 
@@ -291,11 +294,11 @@ class Showo(ModelMixin, ConfigMixin):
 
             # Set tokens that have already been unmasked to previously-sampled
             # value
-            mask_curr = input_ids_masked[:, image_start_idx : image_start_idx + image_len_tokens] == mask_token_id
+            mask_curr = input_ids_masked[image_pos] == mask_token_id
             sampled_ids = torch.where(
                 mask_curr,
                 sampled_ids,
-                input_ids_masked[:, image_start_idx : image_start_idx + image_len_tokens]
+                input_ids_masked[image_pos]
             )
 
             # Get the mask ratio for the next round. This is the ratio of masked
@@ -332,15 +335,15 @@ class Showo(ModelMixin, ConfigMixin):
             this_round_predictions = mask_curr & ~mask_next
 
             # Unmask tokens that were predicted this round using ground truth value
-            input_ids_masked[:, image_start_idx : image_start_idx + image_len_tokens] = torch.where(
+            input_ids_masked[image_pos] = torch.where(
                 this_round_predictions,
-                input_ids[:, image_start_idx : image_start_idx + image_len_tokens],
+                input_ids[image_pos],
                 mask_token_id,
             )
 
             # Save logits for tokens that were predicted this round
             logits_image_all_iters = torch.where(
-                this_round_predictions,
+                this_round_predictions.unsqueeze(-1), # Expand for vocab
                 logits_image,
                 logits_image_all_iters,
             )

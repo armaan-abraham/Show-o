@@ -32,6 +32,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from lightning.pytorch.utilities import CombinedLoader
+from einops import rearrange
 
 from transformers import AutoTokenizer
 from accelerate import Accelerator
@@ -57,7 +58,7 @@ from llava.llava_data_vq_unified import get_instruct_data_loader
 
 SYSTEM_PROMPT_LEN = 28
 
-from training.utils import get_config, flatten_omega_conf, AverageMeter
+from training.utils import get_config, flatten_omega_conf, AverageMeter, get_image_pos
 import tempfile
 
 try:
@@ -419,6 +420,9 @@ def main():
     data_mmu_time_m = AverageMeter()
     end = time.time()
 
+    pad_id = int(uni_prompting.sptids_dict['<|pad|>'])
+    soi_id = int(uni_prompting.sptids_dict['<|soi|>'])
+    eoi_id = int(uni_prompting.sptids_dict['<|eoi|>'])
 
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
@@ -612,20 +616,30 @@ def main():
 
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
                     visualize_predictions(
-                        model,
-                        vq_model,
-                        uni_prompting,
-                        config,
-                        global_step + 1,
-                        input_ids,
-                        image_tokens,
-                        batch["t2i_flow"]["images"],
-                        texts,
-                        logits,
-                        batch_size_lm,
-                        texts_lm,
-                        labels,
-                        tokenizer,
+                        model=model,
+                        vq_model=vq_model,
+                        uni_prompting=uni_prompting,
+                        config=config,
+                        global_step=global_step + 1,
+                        input_ids_t2i=input_ids[:batch_size_t2i],
+                        image_tokens_ori=image_tokens,
+                        ori_images=batch["t2i_flow"]["images"],
+                        logits_t2i=logits[:batch_size_t2i],
+                        soi_id=soi_id,
+                        pad_id=pad_id,
+                        eoi_id=eoi_id, 
+                    )
+                
+                if (global_step + 1) % config.experiment.log_image_sample_loss_every == 0 and accelerator.is_main_process:
+                    log_image_sample_loss(
+                        model=model,
+                        config=config,
+                        global_step=global_step+1,
+                        input_ids_t2i=input_ids[:batch_size_t2i],
+                        logits_t2i=logits[:batch_size_t2i],
+                        soi_id=soi_id,
+                        pad_id=pad_id,
+                        eoi_id=eoi_id,
                     )
 
                 global_step += 1
@@ -647,23 +661,62 @@ def main():
 
     accelerator.end_training()
 
+@torch.no_grad
+def log_image_sample_loss(
+    model,
+    config,
+    global_step,
+    input_ids_t2i,
+    logits_t2i,
+    soi_id: int,
+    pad_id: int,
+    eoi_id: int,
+):
+    image_pos = get_image_pos(input_ids_t2i, soi_id, config.model.core.image_len)
+
+    input_ids_image = input_ids_t2i[image_pos]
+    if config.model.type == "showo":
+        # To provide a more equal comparison, we produce the logits by providing
+        # the ground truth at every denoising step at the predicted locations,
+        # instead of getting the logits from a single mask
+        logits_image = model.predict_t2i_with_remask_and_labels(
+            input_ids=input_ids_t2i,
+            soi_id=soi_id,
+            pad_id=pad_id,
+            eoi_id=eoi_id,
+            timesteps=config.model.generation_timesteps,
+            config=config,
+        )
+    else:
+        logits_image = logits_t2i[image_pos]
+    
+    logits_image = rearrange(
+        logits_image,
+        "batch seq vocab -> batch vocab seq"
+    )
+    
+    loss = F.cross_entropy(
+        input=logits_image,
+        target=input_ids_image,
+    )
+
+    wandb.log({"loss_image_sample": loss}, step=global_step)
+
 
 @torch.no_grad()
 def visualize_predictions(
-        model,
-        vq_model,
-        uni_prompting,
-        config,
-        global_step,
-        input_ids,
-        image_tokens_ori,
-        ori_images,
-        texts,
-        logits,
-        batch_size_lm,
-        texts_lm,
-        labels,
-        tokenizer,
+    model,
+    vq_model,
+    uni_prompting,
+    config,
+    global_step,
+    input_ids_t2i,
+    image_tokens_ori,
+    ori_images,
+    logits_t2i,
+    soi_id: int,
+    pad_id: int,
+    eoi_id: int,
 ):
     """
     Visualize predictions by showing original images, VQ reconstructed images, and model predictions side by side.
@@ -694,27 +747,27 @@ def visualize_predictions(
     num_new_special_tokens = config.model.tokenize.num_new_special_tokens
     vocab_size = config.model.tokenize.vocab_size
 
-    soi_id = int(uni_prompting.sptids_dict['<|soi|>'])
+    if config.model.type == "showo":
+        # To make it fair, we produce the logits by providing the ground truth
+        # at every denoising step, instead of getting the logits from a single
+        # mask
+        logits_image = model.predict_t2i_with_remask_and_labels(
+            input_ids=input_ids_t2i,
+            soi_id=soi_id,
+            pad_id=pad_id,
+            eoi_id=eoi_id,
+            timesteps=config.model.generation_timesteps,
+            config=config,
+        )
+    else:
+        image_pos = get_image_pos(input_ids_t2i, soi_id, config.model.core.image_len)
 
-    # Get t2i batch only
-    input_ids_t2i = input_ids[:config.training.batch_size_t2i]
-    logits_t2i = logits[:config.training.batch_size_t2i]
+        logits_image = logits_t2i[image_pos]
+    
+    # Take only image tokens in vocab
+    logits_image = logits_image[:, :, llm_vocab_size + num_new_special_tokens : -1]
 
-    # Find SOI positions for each sequence in the batch
-    soi_positions = (input_ids_t2i == soi_id).nonzero(as_tuple=True)[1]
-
-    # Extract image token predictions starting after SOI
-    # We need to gather the predictions for image token positions
-    batch_predictions = []
-    for soi_pos, seq_logits in zip(soi_positions, logits_t2i):
-        soi_pos = soi_pos.item()
-        # Extract logits for image tokens (num_vq_tokens after SOI)
-        # Also only extract logits corresponding to image tokens in vocab
-        img_logits = seq_logits[soi_pos+1:soi_pos+1+num_vq_tokens, llm_vocab_size + num_new_special_tokens:-1]
-        img_predictions = img_logits.argmax(dim=-1)
-        batch_predictions.append(img_predictions)
-
-    predictions = torch.stack(batch_predictions)
+    predictions = logits_image.argmax(dim=-1) # [batch seq]
 
     # Decode predicted images
     predicted_images = vq_model.decode_code(predictions)
@@ -729,63 +782,6 @@ def visualize_predictions(
     # Log images to wandb
     wandb_images = [wandb.Image(image, caption=texts[i]) for i, image in enumerate(pil_images)]
     wandb.log({"Original images v.s. Reconstructed images v.s. Predicted images": wandb_images}, step=global_step)
-
-    # Process language modeling predictions
-    batch_size_t2i = config.training.batch_size_t2i
-
-    # Extract LM portion of logits, labels, and input_ids
-    logits_lm = logits[batch_size_t2i:batch_size_t2i + batch_size_lm]
-    labels_lm = labels[batch_size_t2i:batch_size_t2i + batch_size_lm]
-    input_ids_lm = input_ids[batch_size_t2i:batch_size_t2i + batch_size_lm]
-
-    # Get predicted tokens by taking argmax
-    predicted_tokens_lm = logits_lm.argmax(dim=-1)
-
-    # Get pad token ID
-    pad_id = int(uni_prompting.sptids_dict['<|pad|>'])
-
-    # Create wandb Table for LM predictions
-    artifact = wandb.Artifact(name=f"lm_predictions_{global_step}", type="predictions",
-                              metadata={"global_step": global_step})
-    with tempfile.TemporaryDirectory() as tmpdir:
-        out_path = os.path.join(tmpdir, "lm_predictions.txt")
-        with open(out_path, "w", encoding="utf-8") as f:
-            for i in range(batch_size_lm):
-                # Get ground truth tokens and input tokens
-                gt_tokens = labels_lm[i]
-                pred_tokens = predicted_tokens_lm[i]
-                inp_tokens = input_ids_lm[i]
-
-                # Mask to identify non-pad tokens in input
-                valid_mask = inp_tokens != pad_id
-
-                # Get valid ground truth and predicted tokens as Python lists
-                valid_gt_tokens = gt_tokens[valid_mask].cpu().tolist()
-                valid_pred_tokens = pred_tokens[valid_mask].cpu().tolist()
-
-                # Decode to text
-                gt_text = tokenizer.decode(valid_gt_tokens, skip_special_tokens=False)
-                pred_text = tokenizer.decode(valid_pred_tokens, skip_special_tokens=False)
-
-                # Calculate token-level accuracy
-                if len(valid_gt_tokens) > 0:
-                    correct_tokens = sum(1 for a, b in zip(valid_gt_tokens, valid_pred_tokens) if a == b)
-                    total_tokens = len(valid_gt_tokens)
-                    accuracy = correct_tokens / total_tokens
-                else:
-                    correct_tokens = 0
-                    total_tokens = 0
-                    accuracy = 0.0
-
-                # Write sample to file
-                f.write(f"Sample {i}\n")
-                f.write("-" * 40 + "\n")
-                f.write(f"Ground Truth (truncated to 500 chars):\n{gt_text}\n\n")
-                f.write(f"Predicted (truncated to 500 chars):\n{pred_text}\n\n")
-                f.write(f"Token Accuracy: {accuracy:.2%} ({correct_tokens}/{total_tokens})\n\n\n")
-
-        artifact.add_file(out_path)
-        wandb.log_artifact(artifact)
 
     model.train()
 

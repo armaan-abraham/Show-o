@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from typing import Any, List, Tuple, Union
-
+from einops import repeat
 
 ##################################################
 #              config utils
@@ -15,6 +15,15 @@ def get_config():
     conf = OmegaConf.merge(yaml_conf, cli_conf)
 
     return conf
+
+def get_image_pos(ids, soi_id, image_len):
+    """ get idxs for images in batch of tokens """
+    batch_size = ids.shape[0]
+    seq_idx = repeat(torch.arange(image_len, device=ids.device), "seq -> batch seq", batch=batch_size).contiguous()
+    seq_idx += (torch.argmax((ids == soi_id).int(), dim=1) + 1).unsqueeze(1)
+    assert seq_idx.shape == (batch_size, image_len)
+    batch_idx = repeat(torch.arange(batch_size, device=ids.device), "batch -> batch seq", seq=image_len)
+    return batch_idx, seq_idx
 
 
 def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]:
