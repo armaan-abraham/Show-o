@@ -9,6 +9,7 @@ from .utils import (
     get_index_and_grouping,
     get_index_and_grouping_linear,
     get_index_and_grouping_recursive_half,
+    get_index_and_grouping_recursive_quarter,
     get_io_interface_mask,
     reorder_and_group_token_batch,
     remove_pads_from_attn_mask,
@@ -76,6 +77,12 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             )
         elif inference_grouping_type == "recursive_half":
             self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_recursive_half(image_dim) 
+        elif inference_grouping_type == "recursive_quarter":
+            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_recursive_quarter(image_dim) 
+
+        assert self.img_reorder_idx_root.unique().numel() == image_len
+        assert torch.equal(self.img_inference_groups_root, torch.sort(self.img_inference_groups_root)[0])
+        print("Number of inference groups:", self.img_inference_groups_root.max() + 1)
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -295,7 +302,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 ignore_index=ignore_id,
                 label_smoothing=label_smoothing,
             )
-            assert(not torch.isnan(loss_t2i) and not torch.isinf(loss_t2i))
 
             loss_lm = F.cross_entropy(
                 input=logits_rearranged[
@@ -307,7 +313,10 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 ignore_index=ignore_id,
                 label_smoothing=label_smoothing,
             )
-            assert(not torch.isnan(loss_lm) and not torch.isinf(loss_lm))
+
+            # Assert that first ignore is at least num image tokens + num
+            # special tokens in (excluding ignore from first inference group)
+            assert torch.all(torch.argmax((labels_reordered[batch_size_t2i + batch_size_lm :, 1:] == ignore_id).int(), dim=1) > (self.config.image_len + 2))
 
             loss_mmu = F.cross_entropy(
                 input=logits_rearranged[batch_size_t2i + batch_size_lm :],
@@ -315,7 +324,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 ignore_index=ignore_id,
                 label_smoothing=label_smoothing,
             )
-            assert(not torch.isnan(loss_mmu) and not torch.isinf(loss_mmu))
 
             result += [loss_t2i, loss_lm, loss_mmu]
 

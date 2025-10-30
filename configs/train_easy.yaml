@@ -32,7 +32,7 @@ model:
     type: "easy"
 
     core:
-        inference_grouping_type: "recursive_half"
+        inference_grouping_type: "recursive_quarter"
 
         max_seq_len: 387
         
