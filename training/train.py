@@ -625,6 +625,7 @@ def main():
                         image_tokens_ori=image_tokens,
                         ori_images=batch["t2i_flow"]["images"],
                         logits_t2i=logits[:batch_size_t2i],
+                        texts_t2i=texts,
                         soi_id=soi_id,
                         pad_id=pad_id,
                         eoi_id=eoi_id, 
@@ -713,6 +714,7 @@ def visualize_predictions(
     input_ids_t2i,
     image_tokens_ori,
     ori_images,
+    texts_t2i,
     logits_t2i,
     soi_id: int,
     pad_id: int,
@@ -780,7 +782,7 @@ def visualize_predictions(
     pil_images = [Image.fromarray(image) for image in predicted_images]
 
     # Log images to wandb
-    wandb_images = [wandb.Image(image, caption=texts[i]) for i, image in enumerate(pil_images)]
+    wandb_images = [wandb.Image(image, caption=texts_t2i[i]) for i, image in enumerate(pil_images)]
     wandb.log({"Original images v.s. Reconstructed images v.s. Predicted images": wandb_images}, step=global_step)
 
     model.train()
