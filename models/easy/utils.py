@@ -81,10 +81,9 @@ def get_index_and_grouping_recursive_half(dim: int) -> Tuple[Int[Tensor, "token"
             results_for_segments = [level_results]
         else:
             # Split in half
-            first_len = int(len(level_results) / 2)
             results_for_segments = [
-                level_results[:first_len],
-                level_results[first_len:],
+                level_results[1::2],
+                level_results[::2],
             ]
         
         for results_for_segment in results_for_segments:
@@ -200,7 +199,7 @@ if __name__ == "__main__":
         print(level_results)
 
     indexes, grouping = get_index_and_grouping(4)
-    print("== Log ==")
+    print("== Recursive ==")
     print("Indexes")
     print(len(indexes))
     print(indexes)
