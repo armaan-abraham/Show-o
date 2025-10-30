@@ -249,7 +249,6 @@ class Showo(ModelMixin, ConfigMixin):
         mask_token_id = self.config.mask_token_id
         image_len_tokens = self.config.image_len
         assert input_ids.shape[1] > image_len_tokens
-        num_new_special_tokens = config.model.tokenize.num_new_special_tokens
 
         image_pos = get_image_pos(input_ids, soi_id, image_len_tokens)
 
@@ -260,10 +259,9 @@ class Showo(ModelMixin, ConfigMixin):
         # Create image logits tensor that we will iteratively fill in and return
         logits_image_all_iters = torch.empty(
             (batch_size, image_len_tokens, self.config.vocab_size),
-            dtype=float, 
+            dtype=torch.float32, 
             device=input_ids.device
         )
-
 
         attn_mask = self.assemble_attention_mask(
             input_ids=input_ids,
@@ -275,7 +273,12 @@ class Showo(ModelMixin, ConfigMixin):
             eoi_id=eoi_id,
         )
 
+        torch.save(input_ids, "input_ids.pt")
+        print("SAVED")
+
         for step in range(timesteps):
+            torch.save(input_ids_masked, f"input_ids_masked_{step}.pt")
+            
             # Run forward pass on entire sequence
             logits = self.model(input_ids=input_ids_masked, attn_mask=attn_mask)
             assert logits.shape == (batch_size, seq_len, self.config.vocab_size)
@@ -338,7 +341,7 @@ class Showo(ModelMixin, ConfigMixin):
             input_ids_masked[image_pos] = torch.where(
                 this_round_predictions,
                 input_ids[image_pos],
-                mask_token_id,
+                input_ids_masked[image_pos],
             )
 
             # Save logits for tokens that were predicted this round
