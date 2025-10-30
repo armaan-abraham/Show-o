@@ -218,7 +218,7 @@ def main():
                                            "<|soi|>", "<|eoi|>", "<|sov|>", "<|eov|>", "<|t2i|>",
                                            "<|mmu|>", "<|t2v|>", "<|v2v|>", "<|lvg|>"
                                        ),
-                                       ignore_id=-100, cond_dropout_prob=config.training.cond_dropout_prob)
+                                       ignore_id=-100)
 
     print('special tokens : \n', uni_prompting.sptids_dict)
 
