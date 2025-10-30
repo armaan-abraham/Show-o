@@ -8,6 +8,7 @@ from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 
 dtype_str_to_torch = {
     "bf16": torch.bfloat16,
+    "f32": torch.float32,
 }
 
 class TransformerBlock(nn.Module):

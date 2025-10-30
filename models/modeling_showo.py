@@ -44,7 +44,6 @@ class Showo(ModelMixin, ConfigMixin):
             num_heads: int,
             image_len: int,
             dtype: str,
-            accelerator,
     ):
         super().__init__()
         self.register_to_config(mask_token_id=vocab_size - 1)
@@ -57,7 +56,6 @@ class Showo(ModelMixin, ConfigMixin):
             num_heads=num_heads,
             dtype=dtype,
         )
-        self.accelerator = accelerator
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True

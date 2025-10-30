@@ -244,7 +244,7 @@ def main():
         ignore_prefix_tokens = False
     else:
         assert config.model.type == "showo"
-        model = Showo(vocab_size=config.model.tokenize.vocab_size, accelerator=accelerator, **config.model.core).to(accelerator.device)
+        model = Showo(vocab_size=config.model.tokenize.vocab_size, **config.model.core).to(accelerator.device)
         ignore_prefix_tokens = True
 
     mask_id = config.model.tokenize.vocab_size - 1
