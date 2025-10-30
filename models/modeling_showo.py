@@ -273,11 +273,8 @@ class Showo(ModelMixin, ConfigMixin):
             eoi_id=eoi_id,
         )
 
-        torch.save(input_ids, "input_ids.pt")
-        print("SAVED")
 
         for step in range(timesteps):
-            torch.save(input_ids_masked, f"input_ids_masked_{step}.pt")
             
             # Run forward pass on entire sequence
             logits = self.model(input_ids=input_ids_masked, attn_mask=attn_mask)
