@@ -70,6 +70,34 @@ def get_index_and_grouping(dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, 
             
     return torch.tensor(indexes), torch.tensor(grouping)
 
+def get_index_and_grouping_recursive_half(dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, "token"]]:
+    indexes = []
+    grouping = []
+
+    group_id = 0
+
+    for level_results in create_image_token_ordering(dim):
+        if len(level_results) == 1:
+            results_for_segments = [level_results]
+        else:
+            # Split in half
+            first_len = int(len(level_results) / 2)
+            results_for_segments = [
+                level_results[:first_len],
+                level_results[first_len:],
+            ]
+        
+        for results_for_segment in results_for_segments:
+        
+            for coord in results_for_segment:
+                index = convert_coord_to_index(coord, dim)
+                indexes.append(index)
+                grouping.append(group_id)
+
+            group_id += 1
+            
+    return torch.tensor(indexes), torch.tensor(grouping) 
+
 def get_index_and_grouping_linear(num_groups: int, dim: int) -> Tuple[Int[Tensor, "token"], Int[Tensor, "token"]]:
     num_tokens = dim ** 2
     tokens_per_group = int(num_tokens / num_groups)
@@ -184,6 +212,19 @@ if __name__ == "__main__":
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
 
+    indexes, grouping = get_index_and_grouping_recursive_half(4)
+    print("== Recursive half ==")
+    print("Indexes")
+    print(len(indexes))
+    print(indexes)
+    print("Grouping")
+    print(grouping)
+    print(grouping.unique())
+    print("Input-output interface mask")
+    print(get_io_interface_mask(grouping.unsqueeze(0)).int())
+    print("Attention mask")
+    print(get_attn_mask(grouping.unsqueeze(0)).int())
+
     indexes, grouping = get_index_and_grouping_linear(8, 4)
     print("== Linear ==")
     print("Indexes")
@@ -196,6 +237,7 @@ if __name__ == "__main__":
     print(get_io_interface_mask(grouping.unsqueeze(0)).int())
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
+
 
     # Simple test input for reorder_and_group with image size 4
     # Image size 4 means 4x4 = 16 image tokens
@@ -233,7 +275,7 @@ if __name__ == "__main__":
     print("\nTest input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
-    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, *get_index_and_grouping(4))
+    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, *get_index_and_grouping_recursive_half(4))
     test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
     print("\nReordered input tensor:")
     print(test_input_reordered)

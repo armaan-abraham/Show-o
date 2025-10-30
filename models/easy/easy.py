@@ -8,6 +8,7 @@ from pathlib import Path
 from .utils import (
     get_index_and_grouping,
     get_index_and_grouping_linear,
+    get_index_and_grouping_recursive_half,
     get_io_interface_mask,
     reorder_and_group_token_batch,
     remove_pads_from_attn_mask,
@@ -33,7 +34,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         d_mlp: int,
         num_heads: int,
         dtype: str,
-        inference_grouping: dict,
+        inference_grouping_type: str,
+        **kwargs,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -65,13 +67,15 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
         image_dim = int(image_len ** 0.5)
         assert image_dim * image_dim == image_len
-        if inference_grouping["type"] == "recursive":
+        if inference_grouping_type == "recursive":
             self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping(image_dim)
-        elif inference_grouping["type"] == "linear":
+        elif inference_grouping_type == "linear":
             self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_linear(
-                inference_grouping["num_groups"],
+                kwargs["inference_grouping_num"],
                 image_dim,
             )
+        elif inference_grouping_type == "recursive_half":
+            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_recursive_half(image_dim) 
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True

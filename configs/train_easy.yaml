@@ -12,7 +12,7 @@ experiment:
     save_every: 10000
     eval_every: 2500
     generate_every: 500
-    log_image_sample_loss_every: 5
+    log_image_sample_loss_every: 250
     log_every: 50
     log_grad_norm_every: 50
     resume_from_checkpoint: False
@@ -32,9 +32,7 @@ model:
     type: "easy"
 
     core:
-        inference_grouping:
-            type: "linear"
-            num_groups: 128
+        inference_grouping_type: "recursive_half"
 
         max_seq_len: 387
         
