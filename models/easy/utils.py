@@ -186,7 +186,7 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
     inference_groups = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
-    num_inference_groups_per_img = img_inference_groups[-1]
+    num_inference_groups_per_img = img_inference_groups[-1] + 1
     img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
     inference_groups[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_inference_groups
 
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
 
-    indexes, grouping = get_index_and_grouping_recursive_quarter(8)
+    indexes, grouping = get_index_and_grouping_recursive_quarter(4)
     print("== Recursive quarter ==")
     print("Indexes")
     print(len(indexes))
@@ -254,26 +254,23 @@ if __name__ == "__main__":
     print("Attention mask")
     print(get_attn_mask(grouping.unsqueeze(0)).int())
 
-    
-    assert indexes.unique().numel() == 64
 
     for val in grouping.unique():
         mask = grouping == val
-        print("group:", val.item())
-        print(indexes[mask])
+        print(len(indexes[mask]))
 
-    indexes, grouping = get_index_and_grouping_linear(8, 4)
-    print("== Linear ==")
-    print("Indexes")
-    print(len(indexes))
-    print(indexes)
-    print("Grouping")
-    print(grouping)
-    print(grouping.unique())
-    print("Input-output interface mask")
-    print(get_io_interface_mask(grouping.unsqueeze(0)).int())
-    print("Attention mask")
-    print(get_attn_mask(grouping.unsqueeze(0)).int())
+    # indexes, grouping = get_index_and_grouping_linear(8, 4)
+    # print("== Linear ==")
+    # print("Indexes")
+    # print(len(indexes))
+    # print(indexes)
+    # print("Grouping")
+    # print(grouping)
+    # print(grouping.unique())
+    # print("Input-output interface mask")
+    # print(get_io_interface_mask(grouping.unsqueeze(0)).int())
+    # print("Attention mask")
+    # print(get_attn_mask(grouping.unsqueeze(0)).int())
 
 
     # Simple test input for reorder_and_group with image size 4
@@ -314,22 +311,32 @@ if __name__ == "__main__":
     print(f"Shape: {test_input.shape}")
     (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, *get_index_and_grouping_recursive_quarter(4))
     test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
+
     print("\nReordered input tensor:")
     print(test_input_reordered)
     test_input_ori_order = reset_to_ori_order(test_input_reordered, reorder_idx_batch, reorder_idx_seq)
+
     print("\nOriginal order")
     print(test_input_ori_order)
     print(f"Shape: {test_input_reordered.shape}")
+
     print("\nReorder indexes:")
     print(reorder_idx_batch)
     print(reorder_idx_seq)
+
     print("\ninference groups:")
     print(inference_groups)
+
     print("\nAttention mask:")
     attn_mask = get_attn_mask(inference_groups).int()
     pad_id = 0
     attn_mask = remove_pads_from_attn_mask(attn_mask, test_input_reordered, pad_id=pad_id).int()
     for mat in attn_mask:
+        print(mat)
+
+    print("Io interface mask")
+    io_interface_mask = get_io_interface_mask(inference_groups).int()
+    for mat in io_interface_mask:
         print(mat)
 
     nonpad_first = (test_input_reordered != pad_id).int().argmax(dim=1)

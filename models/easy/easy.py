@@ -82,7 +82,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
         assert self.img_reorder_idx_root.unique().numel() == image_len
         assert torch.equal(self.img_inference_groups_root, torch.sort(self.img_inference_groups_root)[0])
-        print("Number of inference groups:", self.img_inference_groups_root.max() + 1)
+        print("Number of inference groups:", self.img_inference_groups_root.max().item() + 1)
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -316,7 +316,11 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
             # Assert that first ignore is at least num image tokens + num
             # special tokens in (excluding ignore from first inference group)
-            assert torch.all(torch.argmax((labels_reordered[batch_size_t2i + batch_size_lm :, 1:] == ignore_id).int(), dim=1) > (self.config.image_len + 2))
+            is_ignore = labels_reordered[batch_size_t2i + batch_size_lm :, 1:] == ignore_id
+            if not torch.all((torch.argmax(is_ignore.int(), dim=1) > (self.config.image_len + 2)) | ~torch.any(is_ignore, dim=1)):
+                torch.save(labels_reordered, "labels_reordered.pt")
+                raise Exception("Invalid mmu data")
+
 
             loss_mmu = F.cross_entropy(
                 input=logits_rearranged[batch_size_t2i + batch_size_lm :],

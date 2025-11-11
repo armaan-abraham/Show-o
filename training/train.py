@@ -71,7 +71,7 @@ except ImportError:
 logger = get_logger(__name__, log_level="INFO")
 
 
-def compute_average_entropy(logits, labels, ignore_id):
+def compute_average_entropy(logits, labels, ignore_id, save_on_fail=False):
     """
     Compute average entropy for predicted logits, masking out padding/ignore tokens.
 
@@ -99,7 +99,14 @@ def compute_average_entropy(logits, labels, ignore_id):
         entropy,
         0,
     )
+
     avg_entropy = masked_entropy.sum() / non_ignore_mask.sum()
+
+    if not torch.all(avg_entropy.isfinite()):
+        print("Nan entropy")
+        # if save_on_fail:
+        #     torch.save(logits, "logits_nan.pt")
+        #     torch.save(labels, "labels_nan.pt")
 
     return avg_entropy.item()
 
@@ -566,9 +573,9 @@ def main():
                         labels_mmu = labels[batch_size_t2i+batch_size_lm:]
 
                         # Compute average entropy for each data type
-                        entropy_t2i = compute_average_entropy(logits_t2i, labels_t2i, uni_prompting.ignore_id)
-                        entropy_lm = compute_average_entropy(logits_lm, labels_lm, uni_prompting.ignore_id)
-                        entropy_mmu = compute_average_entropy(logits_mmu, labels_mmu, uni_prompting.ignore_id)
+                        entropy_t2i = compute_average_entropy(logits_t2i, labels_t2i, uni_prompting.ignore_id, save_on_fail=True)
+                        entropy_lm = compute_average_entropy(logits_lm, labels_lm, uni_prompting.ignore_id, save_on_fail=False)
+                        entropy_mmu = compute_average_entropy(logits_mmu, labels_mmu, uni_prompting.ignore_id, save_on_fail=False)
 
                     logs = {
                         "loss": loss.item(),

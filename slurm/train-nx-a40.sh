@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=train
-#SBATCH --partition=iris
+#SBATCH --partition=iris-hi
 #SBATCH --account=iris
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1 
 #SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:a40:4
+#SBATCH --gres=gpu:l40s:4
 #SBATCH --time=10:00:00
 #SBATCH --output=/iris/u/armaana/jobs/logs/%x_%j.out
 #SBATCH --error=/iris/u/armaana/jobs/logs/%x_%j.err
