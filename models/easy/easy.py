@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ..modeling_utils import ConfigMixin, ModelMixin, register_to_config
 from ..base import TransformerBlock, dtype_str_to_torch
+from typing import Tuple
 from pathlib import Path
 from .utils import (
     get_index_and_grouping,
@@ -15,6 +16,9 @@ from .utils import (
     remove_pads_from_attn_mask,
     get_attn_mask,
     reset_to_ori_order,
+    get_sigma_reorder_and_grouping,
+    get_geo_reorder_and_grouping,
+    get_vanilla_reorder_and_grouping,
 )
 from einops import repeat, rearrange, reduce, einsum
 from jaxtyping import Float, Int, Bool
@@ -66,23 +70,10 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         # Input-output interface
         self.input_k_transform = nn.Linear(d_model, d_model)
 
-        image_dim = int(image_len ** 0.5)
-        assert image_dim * image_dim == image_len
-        if inference_grouping_type == "recursive":
-            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping(image_dim)
-        elif inference_grouping_type == "linear":
-            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_linear(
-                kwargs["inference_grouping_num"],
-                image_dim,
-            )
-        elif inference_grouping_type == "recursive_half":
-            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_recursive_half(image_dim) 
-        elif inference_grouping_type == "recursive_quarter":
-            self.img_reorder_idx_root, self.img_inference_groups_root = get_index_and_grouping_recursive_quarter(image_dim) 
+        self.oi_pos_ln = nn.LayerNorm(d_model)
 
-        assert self.img_reorder_idx_root.unique().numel() == image_len
-        assert torch.equal(self.img_inference_groups_root, torch.sort(self.img_inference_groups_root)[0])
-        print("Number of inference groups:", self.img_inference_groups_root.max().item() + 1)
+        self.register_to_config(**kwargs)
+
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
@@ -103,6 +94,17 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 reorder_idx_seq
             )
 
+            output_pos_embed = self.output_pos_embed(reorder_idx_seq)
+
+            # Add sum of output position embeddings to each input position
+            # generating a prediction for them
+            oi_interface_mask = rearrange(io_interface_mask, "batch input output -> batch output input").float()
+            resid += self.oi_pos_ln(einsum(
+                oi_interface_mask,
+                output_pos_embed,
+                "batch seq seq_agg, batch seq_agg d_model -> batch seq d_model"
+            ))
+
             for input_block in self.input_blocks:
                 resid = input_block(resid, attn_mask=attn_mask)
 
@@ -111,7 +113,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             # each inference group of input blocks to the next inference group of
             # output blocks via attention. We do this by initializing the full seq x
             # seq attention mask, which is a wasteful but temporary solution.
-            output_resid = self.output_pos_embed(reorder_idx_seq)
+            output_resid = output_pos_embed
             assert output_resid.shape == (batch_size, seq_len, self.config.d_model)
             assert resid.shape == output_resid.shape
 
@@ -161,6 +163,88 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             logits = self.unembed(resid)
 
         return logits
+    
+    def get_img_reorder_idx_and_inference_groups(
+        self,
+        batch_size: int,
+        device: torch.device,
+        img_reorder_idx: Int[Tensor, "batch img_seq"] = None,
+        img_inference_groups: Int[Tensor, "batch img_seq"] = None,
+    ) -> Tuple[Int[Tensor, "batch img_seq"], Int[Tensor, "batch img_seq"]]:
+
+        image_len = self.config.image_len
+        image_dim = int(image_len ** 0.5)
+        assert image_dim * image_dim == image_len
+
+        if img_reorder_idx is not None:
+            img_reorder_idx = img_reorder_idx.to(device)
+        if img_inference_groups is not None:
+            img_inference_groups = img_inference_groups.to(device)
+
+
+        # Construct image reorder idx and inference groups if not provided
+        if img_reorder_idx is None or img_inference_groups is None:
+
+            root_only = False
+            if self.config.inference_grouping_type == "recursive":
+                root_only = True
+                img_reorder_idx_root, img_inference_groups_root = get_index_and_grouping(image_dim)
+            elif self.config.inference_grouping_type == "linear":
+                root_only = True
+                img_reorder_idx_root, img_inference_groups_root = get_index_and_grouping_linear(
+                    self.config.inference_grouping_num,
+                    image_dim,
+                )
+            elif self.config.inference_grouping_type == "recursive_half":
+                root_only = True
+                img_reorder_idx_root, img_inference_groups_root = get_index_and_grouping_recursive_half(image_dim) 
+            elif self.config.inference_grouping_type == "recursive_quarter":
+                root_only = True
+                img_reorder_idx_root, img_inference_groups_root = get_index_and_grouping_recursive_quarter(image_dim) 
+            elif self.config.inference_grouping_type == "sigma":
+                img_reorder_idx, img_inference_groups = get_sigma_reorder_and_grouping(
+                    batch_size,
+                    image_dim,
+                    device=device,
+                )
+            elif self.config.inference_grouping_type == "geo":
+                img_reorder_idx, img_inference_groups = get_geo_reorder_and_grouping(
+                    batch_size,
+                    image_dim,
+                    self.config.inference_grouping_prob,
+                    device=device,
+                )
+            elif self.config.inference_grouping_type == "vanilla":
+                img_reorder_idx, img_inference_groups = get_vanilla_reorder_and_grouping(
+                    batch_size,
+                    image_dim,
+                    device=device,
+                )
+            else:
+                raise ValueError(f"Unknown inference grouping type: {self.config.inference_grouping_type}")
+
+
+            if root_only:
+                if img_reorder_idx is None:
+                    img_reorder_idx = repeat(
+                        img_reorder_idx_root,
+                        "img_seq -> batch img_seq",
+                        batch=batch_size,
+                    ).clone()
+                if img_inference_groups is None:
+                    img_inference_groups = repeat(
+                        img_inference_groups_root,
+                        "img_seq -> batch img_seq",
+                        batch=batch_size,
+                    ).clone()
+
+        assert img_reorder_idx.shape == (batch_size, self.config.image_len)
+        assert img_inference_groups.shape == (batch_size, self.config.image_len)
+        for i in range(batch_size):
+            assert torch.equal(img_inference_groups[i], torch.sort(img_inference_groups[i])[0])
+            assert img_reorder_idx[i].unique().numel() == image_len
+
+        return img_reorder_idx, img_inference_groups
 
     def forward(
         self,
@@ -176,6 +260,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         global_step: int = None,
         label_smoothing: float = 0.0,
         keep_prediction_order: bool = False,
+        img_reorder_idx: Int[Tensor, "batch img_seq"] = None,
+        img_inference_groups: Int[Tensor, "batch img_seq"] = None,
         **kwargs,
     ):
         with torch.no_grad():
@@ -185,6 +271,13 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             seq_len = input_ids.shape[1]
             assert seq_len <= self.config.max_seq_len
 
+            img_reorder_idx, img_inference_groups = self.get_img_reorder_idx_and_inference_groups(
+                batch_size_t2i + batch_size_mmu,
+                device,
+                img_reorder_idx,
+                img_inference_groups,
+            )
+
             # Construct inference groups and reorder idxs for each task type then combine
             # t2i and mmu have images so we need to reorder
             (reorder_idx_t2i_batch, reorder_idx_t2i_seq), inference_groups_t2i = (
@@ -193,8 +286,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                     soi_id,
                     eoi_id,
                     self.config.image_len,
-                    self.img_reorder_idx_root,
-                    self.img_inference_groups_root,
+                    img_reorder_idx[:batch_size_t2i],
+                    img_inference_groups[:batch_size_t2i],
                 )
             )
             # TODO: combine these into single call to reorder and group
@@ -204,8 +297,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                     soi_id,
                     eoi_id,
                     self.config.image_len,
-                    self.img_reorder_idx_root,
-                    self.img_inference_groups_root,
+                    img_reorder_idx[batch_size_t2i:],
+                    img_inference_groups[batch_size_t2i:],
                 )
             )
             reorder_idx_lm_seq = repeat(

@@ -50,6 +50,7 @@ from models.base import TransformerForShowo
 from training.prompting_utils import UniversalPrompting
 from models.lr_schedulers import get_scheduler
 from models.logging import set_verbosity_info, set_verbosity_error
+from models.easy.utils import get_vanilla_reorder_and_grouping
 
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -638,7 +639,21 @@ def main():
                         eoi_id=eoi_id, 
                     )
                 
-                if (global_step + 1) % config.experiment.log_image_sample_loss_every == 0 and accelerator.is_main_process:
+                if (global_step + 1) % config.experiment.log_unified_loss_every == 0 and accelerator.is_main_process:
+                    log_vanilla_ar_loss(
+                        model=model,
+                        config=config,
+                        global_step=global_step+1,
+                        input_ids=input_ids,
+                        labels=labels,
+                        batch_size_t2i=batch_size_t2i,
+                        batch_size_lm=batch_size_lm,
+                        batch_size_mmu=batch_size_mmu,
+                        soi_id=soi_id,
+                        pad_id=pad_id,
+                        eoi_id=eoi_id,
+                        ignore_id=uni_prompting.ignore_id,
+                    )
                     log_image_sample_loss(
                         model=model,
                         config=config,
@@ -668,6 +683,55 @@ def main():
         model.save_pretrained(config.experiment.output_dir, safe_serialization=False)
 
     accelerator.end_training()
+
+@torch.no_grad()
+def log_vanilla_ar_loss(
+    model,
+    config,
+    global_step,
+    input_ids,
+    labels,
+    batch_size_t2i,
+    batch_size_lm,
+    batch_size_mmu,
+    soi_id,
+    pad_id,
+    eoi_id,
+    ignore_id,
+    ):
+    if config.model.type != "easy":
+        return
+
+    img_reorder_idx, img_inference_groups = get_vanilla_reorder_and_grouping(
+        batch_size=batch_size_t2i + batch_size_mmu,
+        dim=int(config.model.core.image_len ** 0.5),
+        device=input_ids.device,
+    )
+    logits, loss_t2i, loss_lm, loss_mmu = model(
+        input_ids=input_ids,
+        labels=labels,
+        label_smoothing=config.training.label_smoothing,
+        batch_size_t2i=batch_size_t2i,
+        batch_size_lm=batch_size_lm,
+        batch_size_mmu=batch_size_mmu,
+        max_seq_length=config.dataset.preprocessing.max_seq_length,
+        global_step=global_step,
+        pad_id=pad_id,
+        soi_id=soi_id,
+        eoi_id=eoi_id,
+        ignore_id=ignore_id,
+        config=config,
+        img_reorder_idx=img_reorder_idx,
+        img_inference_groups=img_inference_groups,
+    )
+    logs = {
+        "vanilla_loss_t2i": loss_t2i.item(),
+        "vanilla_loss_mmu": loss_mmu.item(),
+        "vanilla_loss_lm": loss_lm.item(),
+    }
+    wandb.log(logs, step=global_step)
+
+
 
 @torch.no_grad
 def log_image_sample_loss(

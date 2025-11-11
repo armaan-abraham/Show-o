@@ -4,6 +4,7 @@ from torch import Tensor
 from jaxtyping import Int, Bool, Float
 import math
 from einops import reduce, repeat, rearrange
+from torch.distributions import Geometric
 
 Coord = Tuple[int, int]
 
@@ -157,7 +158,7 @@ def get_attn_mask(inference_groups: Int[Tensor, "batch seq"]) -> Bool[Tensor, "b
     mask = key_groups <= query_groups
     return mask
     
-def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int, img_reorder_idx_root: Int[Tensor, "seq"], img_inference_groups_root: Int[Tensor, "seq"]) -> Tuple[Tuple[Int[Tensor, "batch 1"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
+def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: int, eoi_id: int, num_image_tokens: int, img_reorder_idx: Int[Tensor, "batch seq"], img_inference_groups: Int[Tensor, "batch seq"]) -> Tuple[Tuple[Int[Tensor, "batch 1"], Int[Tensor, "batch seq"]], Int[Tensor, "batch seq"]]:
     assert input_ids.dim() == 2
     # Assume single image per seq
     batch_size = input_ids.shape[0]
@@ -174,10 +175,8 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     assert torch.all(reduce(soi_idxs, "batch seq -> batch", "sum") == 1), "More than one soi token in a sequence"
     soi_idxs = soi_idxs.argmax(dim=1) + 1 # [B]
 
-    img_reorder_idx = img_reorder_idx_root.to(device)
-    img_inference_groups = img_inference_groups_root.to(device)
-    # Repeat across the batch and add starting index of image for each row
-    img_reorder_idx = repeat(img_reorder_idx, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
+    # Img reorder idxs describe the image indexes starting at index 0, need to offset by soi idxs for each row
+    img_reorder_idx = img_reorder_idx.to(device) + soi_idxs.unsqueeze(1)
     img_idx_ori = torch.arange(num_image_tokens, device=device).unsqueeze(0) + soi_idxs.unsqueeze(1)
     # Create full versions of reorder indexes and insert image portion we just created
     reorder_idx_seq = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
@@ -185,9 +184,12 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     reorder_idx_batch = torch.arange(batch_size, device=device).unsqueeze(1)
 
     # Create inference groups for all tokens by inserting the image portion in each sequence
+    img_inference_groups = img_inference_groups.to(device)
+    # Get number of inference groups before adding offset
+    num_inference_groups_per_img = img_inference_groups[:, -1] + 1
+    # Add offset
+    img_inference_groups = img_inference_groups + soi_idxs.unsqueeze(1)
     inference_groups = repeat(torch.arange(seq_len, device=device), "seq -> batch seq", batch=batch_size).clone()
-    num_inference_groups_per_img = img_inference_groups[-1] + 1
-    img_inference_groups = repeat(img_inference_groups, "seq -> batch seq", batch=batch_size).clone() + soi_idxs.unsqueeze(1)
     inference_groups[torch.arange(batch_size, device=device).unsqueeze(1), img_idx_ori] = img_inference_groups
 
     # Update the inference groups after the image to start after last image inference group
@@ -201,9 +203,60 @@ def reorder_and_group_token_batch(input_ids: Int[Tensor, "batch seq"], soi_id: i
     post_img_idxs_by_row = grid[mask]
 
     batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=device), post_img_sizes)
-    inference_groups[batch_idx, post_img_idxs_by_row] -= (num_image_tokens - num_inference_groups_per_img)
+    inference_groups[batch_idx, post_img_idxs_by_row] -= (
+        num_image_tokens - torch.repeat_interleave(num_inference_groups_per_img, post_img_sizes)
+    )
 
     return (reorder_idx_batch, reorder_idx_seq), inference_groups
+
+def get_sigma_reorder_and_grouping(batch_size: int, dim: int, device: torch.device) -> Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]]:
+    # Random permutations of image tokens with inference groups of size 1
+    image_len = dim ** 2
+    # Separate random permutation for each row
+    random_vals = torch.rand(batch_size, image_len, device=device)
+    reorder_idx = torch.argsort(random_vals, dim=1)
+    inference_groups = repeat(
+        torch.arange(image_len, device=device),
+        "seq -> batch seq",
+        batch=batch_size
+    ).clone()
+    return reorder_idx, inference_groups
+
+def get_geo_reorder_and_grouping(batch_size: int, dim: int, prob: float, device: torch.device) -> Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]]:
+    # Random permutations of image tokens with inference groups drawn from geometric distribution
+    image_len = dim ** 2
+    # Separate random permutation for each row
+    random_vals = torch.rand(batch_size, image_len, device=device)
+    reorder_idx = torch.argsort(random_vals, dim=1)
+
+    geo_dist = Geometric(prob)
+    inference_groups = torch.zeros(batch_size, image_len, dtype=torch.long, device=device)
+    for i in range(batch_size):
+        inference_group = 0
+        token_count = 0
+        while token_count < image_len:
+            inference_group_size = geo_dist.sample().long().clamp(min=1)
+            for _ in range(inference_group_size.item()):
+                if token_count >= image_len:
+                    break
+                inference_groups[i, token_count] = inference_group
+                token_count += 1
+            inference_group += 1
+            if token_count >= image_len:
+                break
+
+    return reorder_idx, inference_groups
+
+def get_vanilla_reorder_and_grouping(batch_size: int, dim: int, device: torch.device) -> Tuple[Int[Tensor, "batch seq"], Int[Tensor, "batch seq"]]:
+    # No reordering, size-1 inference groups
+    image_len = dim ** 2
+    reorder_idx = repeat(
+        torch.arange(image_len, device=device),
+        "seq -> batch seq",
+        batch=batch_size
+    )
+    inference_groups = reorder_idx.clone()
+    return reorder_idx, inference_groups
 
 def remove_pads_from_attn_mask(attn_mask: Bool[Tensor, "batch seq seq"], input_ids: Int[Tensor, "batch seq"], pad_id: int) -> Bool[Tensor, "batch seq seq"]:
     # attn_mask: [B, S, S]
@@ -309,7 +362,12 @@ if __name__ == "__main__":
     print("\nTest input tensor:")
     print(test_input)
     print(f"Shape: {test_input.shape}")
-    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, *get_index_and_grouping_recursive_quarter(4))
+    reorder_idx_seq, inference_groups = get_index_and_grouping_recursive_quarter(4)
+    reorder_idx_seq = repeat(reorder_idx_seq, "seq -> batch seq", batch=batch_size)
+    inference_groups = repeat(inference_groups, "seq -> batch seq", batch=batch_size)
+    print(reorder_idx_seq.shape)
+    print(inference_groups.shape)
+    (reorder_idx_batch, reorder_idx_seq), inference_groups = reorder_and_group_token_batch(test_input, soi_id, eoi_id, num_image_tokens, reorder_idx_seq, inference_groups)
     test_input_reordered = test_input[reorder_idx_batch, reorder_idx_seq]
 
     print("\nReordered input tensor:")
@@ -345,4 +403,19 @@ if __name__ == "__main__":
     print(first_inference_groups)
 
 
+    sigma_reorder_idx, sigma_inference_groups = get_sigma_reorder_and_grouping(batch_size, image_size, device=test_input.device)
+    print("Sigma reorder idx")
+    print(sigma_reorder_idx.shape)
+    print(sigma_reorder_idx)
+    print("Sigma inference groups")
+    print(sigma_inference_groups.shape)
+    print(sigma_inference_groups)
 
+
+    geo_reorder_idx, geo_inference_groups = get_geo_reorder_and_grouping(batch_size, image_size, 0.4, device=test_input.device)
+    print("Geo reorder idx")
+    print(geo_reorder_idx.shape)
+    print(geo_reorder_idx)
+    print("Geo inference groups")
+    print(geo_inference_groups.shape)
+    print(geo_inference_groups)
