@@ -7,6 +7,7 @@ to evaluate image generation quality.
 """
 
 import os
+import sys
 import torch
 from torch_fidelity import calculate_metrics
 from PIL import Image
@@ -17,9 +18,6 @@ from pathlib import Path
 # ============================================================================
 # CONFIGURATION - Modify these constants as needed
 # ============================================================================
-
-# Path to folder containing generated PNG images
-GENERATED_IMAGES_FOLDER = "/path/to/generated/images"
 
 # Path to ImageNet training dataset (same as in configs/train_easy_geo.yaml)
 IMAGENET_TRAIN_PATH = "/iris/u/armaana/datasets/ILSVRC2012_img_train"
@@ -167,20 +165,25 @@ def compute_fid(generated_folder, imagenet_folder,
 
 def main():
     """Main function to compute and display FID."""
+    if len(sys.argv) < 2:
+        print("Usage: python compute_fid.py <generated_images_folder>")
+        sys.exit(1)
+
+    generated_images_folder = sys.argv[1]
+
     print("=" * 80)
     print("FID Computation between Generated Images and ImageNet")
     print("=" * 80)
-    print(f"\nGenerated images folder: {GENERATED_IMAGES_FOLDER}")
+    print(f"\nGenerated images folder: {generated_images_folder}")
     print(f"ImageNet training path: {IMAGENET_TRAIN_PATH}")
     print(f"Number of generated images to use: {NUM_GENERATED_IMAGES or 'all'}")
     print(f"Number of ImageNet images to use: {NUM_IMAGENET_IMAGES or 'all'}")
     print()
 
     # Check if paths exist
-    if not os.path.exists(GENERATED_IMAGES_FOLDER):
-        print(f"ERROR: Generated images folder does not exist: {GENERATED_IMAGES_FOLDER}")
-        print("Please update GENERATED_IMAGES_FOLDER constant in this script.")
-        return
+    if not os.path.exists(generated_images_folder):
+        print(f"ERROR: Generated images folder does not exist: {generated_images_folder}")
+        sys.exit(1)
 
     if not os.path.exists(IMAGENET_TRAIN_PATH):
         print(f"ERROR: ImageNet path does not exist: {IMAGENET_TRAIN_PATH}")
@@ -190,7 +193,7 @@ def main():
     # Compute FID
     try:
         metrics = compute_fid(
-            GENERATED_IMAGES_FOLDER,
+            generated_images_folder,
             IMAGENET_TRAIN_PATH,
             NUM_GENERATED_IMAGES,
             NUM_IMAGENET_IMAGES
