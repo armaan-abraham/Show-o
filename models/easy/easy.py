@@ -501,13 +501,13 @@ class EasyTransformer(ModelMixin, ConfigMixin):
 
         # The initial inference group for each row will correspond to the first
         # image token.
-        image_pos = torch.argmax(input_ids_reordered == soi_id, dim=1) + 1
+        image_pos = torch.argmax((input_ids_reordered == soi_id).int(), dim=1) + 1
         current_inference_group = inference_groups[
             torch.arange(batch_size, device=device), image_pos
         ]
         # The final inference group for each row will correspond to the
         # inference group of last image token
-        last_image_pos = torch.argmax(input_ids_reordered == eoi_id, dim=1) - 1
+        last_image_pos = torch.argmax((input_ids_reordered == eoi_id).int(), dim=1) - 1
         final_inference_group = inference_groups[
             torch.arange(batch_size, device=device), last_image_pos
         ]
