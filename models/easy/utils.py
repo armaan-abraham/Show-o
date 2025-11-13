@@ -267,6 +267,7 @@ def remove_pads_from_attn_mask(attn_mask: Bool[Tensor, "batch seq seq"], input_i
 
 
 def reset_to_ori_order(predictions: Union[Float[Tensor, "batch seq vocab"], Int[Tensor, "batch seq"]], reorder_idx_batch: Int[Tensor, "batch 1"], reorder_idx_seq: Int[Tensor, "batch seq"]) -> Union[Float[Tensor, "batch seq vocab"], Int[Tensor, "batch seq"]]:
+    # Operates on both logits and token ids
     result = torch.zeros_like(predictions)
     result[reorder_idx_batch, reorder_idx_seq] = predictions
     return result

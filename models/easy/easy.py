@@ -425,3 +425,121 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             result += [loss_t2i, loss_lm, loss_mmu]
 
         return tuple(result)
+
+    def sample_t2i(
+        self,
+        input_ids: Int[Tensor, "batch seq"],
+        pad_id: int,
+        soi_id: int,
+        eoi_id: int,
+        img_reorder_idx: Int[Tensor, "batch img_seq"] = None,
+        img_inference_groups: Int[Tensor, "batch img_seq"] = None,
+        **kwargs,
+    ):
+        with torch.no_grad():
+            device = input_ids.device
+            batch_size = input_ids.shape[0]
+            seq_len = input_ids.shape[1]
+            assert seq_len <= self.config.max_seq_len
+
+            img_reorder_idx, img_inference_groups = self.get_img_reorder_idx_and_inference_groups(
+                batch_size,
+                device,
+                img_reorder_idx,
+                img_inference_groups,
+            )
+
+            # Construct inference groups and reorder idxs for each task type then combine
+            (reorder_idx_batch, reorder_idx_seq), inference_groups = (
+                reorder_and_group_token_batch(
+                    input_ids,
+                    soi_id,
+                    eoi_id,
+                    self.config.image_len,
+                    img_reorder_idx,
+                    img_inference_groups,
+                )
+            )
+
+            assert reorder_idx_batch.shape == (batch_size, 1)
+            assert reorder_idx_seq.shape == (batch_size, seq_len)
+            assert torch.unique(reorder_idx_batch).shape == (batch_size,)
+            assert reorder_idx_batch[0][0] == 0
+            assert inference_groups.shape == (batch_size, seq_len)
+            assert torch.all(inference_groups[:, 0] == 0)
+            # Currently, we shouldn't have any first inference groups larger
+            # than one token.
+            assert torch.all((inference_groups == 0).sum(dim=1) == 1)
+
+            # Reorder input ids
+            input_ids_reordered = input_ids[reorder_idx_batch, reorder_idx_seq]
+
+            # Construct attention mask from inference groups
+            attn_mask = get_attn_mask(inference_groups).to(device)
+            # Note that we don't zero out the pad tokens, because it causes
+            # MultiHeadAttention to produces NaNs
+            assert attn_mask.shape == (batch_size, seq_len, seq_len)
+            assert attn_mask.dtype == torch.bool
+
+            # Get input output interface mask, which is a sparse attention mask for
+            # passing residuals from last input block to first output block
+            io_interface_mask = get_io_interface_mask(inference_groups)
+            assert io_interface_mask.shape == (batch_size, seq_len, seq_len)
+
+            # Construct mask designating where inferences start in each batch.
+            # This will exclude the initial padding tokens and the inference
+            # group immediately after them.
+            # Get first token after optional left padding.
+            nonpad_first = (input_ids_reordered != pad_id).int().argmax(dim=1)
+            # Get inference groups for each first token.
+            first_inference_groups = inference_groups[torch.arange(batch_size, device=device), nonpad_first]
+        
+        # Repeatedly generate logits on the entire batch, and fill in tokens
+        # corresponding to the current inference group, until we have gone
+        # through all inference groups in all rows.
+
+        # The initial inference group for each row will correspond to the first
+        # image token.
+        image_pos = torch.argmax(input_ids_reordered == soi_id, dim=1) + 1
+        current_inference_group = inference_groups[
+            torch.arange(batch_size, device=device), image_pos
+        ]
+        # The final inference group for each row will correspond to the
+        # inference group of last image token
+        last_image_pos = torch.argmax(input_ids_reordered == eoi_id, dim=1) - 1
+        final_inference_group = inference_groups[
+            torch.arange(batch_size, device=device), last_image_pos
+        ]
+        while True:
+            logits = self._forward(
+                input_ids_reordered, reorder_idx_seq, attn_mask, io_interface_mask, inference_groups,
+            )
+
+            assert torch.all(torch.isfinite(logits)), "Logits contain NaNs or Infs"
+
+            # For all tokens in each row that correspond to that row's current
+            # inference group, fill in that token by sampling from the generated
+            # logits.
+            for i in range(batch_size):
+                if current_inference_group[i] > final_inference_group[i]:
+                    continue
+                mask = (inference_groups[i] == current_inference_group[i])
+                if torch.any(mask):
+                    num_to_generate = mask.sum().item()
+                    logits
+                    probs = F.softmax(logits[i, mask], dim=-1)
+                    assert probs.shape[-1] == self.config.vocab_size
+                    sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                    assert sampled_tokens.shape == (num_to_generate,)
+                    input_ids_reordered[i, mask] = sampled_tokens
+            
+            # Move to next inference group
+            current_inference_group += 1
+
+            # Termination condition: if all rows have had their final inference
+            # group generated, we are done.
+            if torch.all(current_inference_group > final_inference_group):
+                break
+
+
+        return reset_to_ori_order(input_ids_reordered, reorder_idx_batch, reorder_idx_seq) 

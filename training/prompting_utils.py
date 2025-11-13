@@ -115,6 +115,44 @@ class UniversalPrompting():
 
         return torch.cat(sequence_ids, dim=0), torch.cat(attention_masks, dim=0), torch.cat(label_ids, dim=0)
 
+
+    def t2i_gen_prompt(self, text_ids, image_len, image_fill_id=0):
+        device = text_ids[0].device
+        sequence_ids = []
+        for i in range(len(text_ids)):
+
+            if len(text_ids[i]) == 0:
+                text_ids[i] = [self.text_tokenizer.bos_token_id]
+            elif text_ids[i][0] != self.text_tokenizer.bos_token_id:
+                text_ids[i] = [self.text_tokenizer.bos_token_id] + text_ids[i]
+
+            # Start with task token and text
+            temp_ids = [int(self.sptids_dict['<|t2i|>'])] + text_ids[i]
+
+            # Truncate if needed, leaving room for eos token
+            if len(temp_ids) >= self.max_text_len:
+                temp_ids = temp_ids[:self.max_text_len - 1]
+
+            # Add eos token
+            temp_ids = temp_ids + [self.text_tokenizer.eos_token_id]
+
+            text_len = len(temp_ids)
+            num_pad_tokens = self.max_text_len - text_len
+
+            # We just fill the image tokens with some dummy token value here for
+            # generation
+            temp_ids = torch.cat([
+                torch.tensor(temp_ids).to(device),
+                self.sptids_dict['<|soi|>'].to(device),
+                torch.full((image_len,), image_fill_id, dtype=torch.long, device=device),
+                self.sptids_dict['<|eoi|>'].to(device),
+                torch.tensor([self.pad_id] * num_pad_tokens).to(device)
+            ], dim=0)
+
+            sequence_ids.append(temp_ids.unsqueeze(0))
+
+        return torch.cat(sequence_ids, dim=0)
+
     # language modeling
     def lm_prompt(self, text_ids, max_seq_len):
 
