@@ -128,6 +128,7 @@ def main():
                 pad_id=pad_id,
                 soi_id=soi_id,
                 eoi_id=eoi_id,
+                img_vocab_start_idx=config.model.tokenize.llm_vocab_size + config.model.tokenize.num_new_special_tokens,
             )
 
         # Extract image tokens from generated sequence

@@ -432,6 +432,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         pad_id: int,
         soi_id: int,
         eoi_id: int,
+        img_vocab_start_idx: int,
         img_reorder_idx: Int[Tensor, "batch img_seq"] = None,
         img_inference_groups: Int[Tensor, "batch img_seq"] = None,
         **kwargs,
@@ -526,9 +527,8 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                 mask = (inference_groups[i] == current_inference_group[i])
                 if torch.any(mask):
                     num_to_generate = mask.sum().item()
-                    logits
-                    probs = F.softmax(logits[i, mask], dim=-1)
-                    assert probs.shape[-1] == self.config.vocab_size
+                    logits_selected_img = logits[i, mask, img_vocab_start_idx:]
+                    probs = F.softmax(logits_selected_img, dim=-1)
                     sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
                     assert sampled_tokens.shape == (num_to_generate,)
                     input_ids_reordered[i, mask] = sampled_tokens
