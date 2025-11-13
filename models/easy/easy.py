@@ -523,7 +523,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
                     probs = F.softmax(logits_selected_img, dim=-1)
                     sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
                     assert sampled_tokens.shape == (num_to_generate,)
-                    input_ids_reordered[i, mask] = sampled_tokens
+                    input_ids_reordered[i, mask] = sampled_tokens + img_vocab_start_idx
             
             # Move to next inference group
             current_inference_group += 1
