@@ -5,14 +5,14 @@ wandb:
 
 experiment:
     project: "training"
-    name: "easy"
-    output_dir: "runs/easy"
+    name: "easy-geo"
+    output_dir: "runs/easy-geo"
     max_train_examples_t2i: 40000000
     max_train_examples_mmu: 40000000
     save_every: 10000
     eval_every: 2500
     generate_every: 1000
-    log_image_sample_loss_every: 250
+    log_unified_loss_every: 200
     log_every: 50
     log_grad_norm_every: 50
     resume_from_checkpoint: False
@@ -32,7 +32,8 @@ model:
     type: "easy"
 
     core:
-        inference_grouping_type: "recursive_quarter"
+        inference_grouping_type: "geo"
+        inference_grouping_prob: 0.5
 
         max_seq_len: 387
         
@@ -104,5 +105,5 @@ training:
     max_grad_norm: 1.0
     guidance_scale: 0.0
     t2i_coeff: 1.0
-    lm_coeff: 0.05
+    lm_coeff: 0.1
     mmu_coeff: 1.0

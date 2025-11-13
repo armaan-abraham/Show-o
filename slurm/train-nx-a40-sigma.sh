@@ -29,6 +29,6 @@ export NUM_DATALOADER_WORKERS=32
 # Your commands here
 echo "Starting job"
 echo "Working directory: $(pwd)"
-PYTHONPATH="$PARENT_DIR/training:$PYTHONPATH" accelerate launch --config_file accelerate_configs/multi_gpu_deepspeed_zero2.yaml training/train.py config=configs/train_easy.yaml
+PYTHONPATH="$PARENT_DIR/training:$PYTHONPATH" accelerate launch --config_file accelerate_configs/multi_gpu_deepspeed_zero2.yaml --main_process_port 29501 training/train.py config=configs/train_easy_sigma.yaml
 
 echo "Job finished at: $(date)"
