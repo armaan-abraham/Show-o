@@ -154,9 +154,9 @@ def compute_fid(generated_folder, imagenet_folder,
             input1=gen_dataset_dir,
             input2=imagenet_dataset_dir,
             cuda=torch.cuda.is_available(),
-            isc=True,
+            isc=False,
             fid=True,
-            kid=True,
+            kid=False,
             verbose=True,
             batch_size=1
         )
