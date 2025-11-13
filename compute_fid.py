@@ -21,6 +21,7 @@ from pathlib import Path
 
 # Path to ImageNet training dataset (same as in configs/train_easy_geo.yaml)
 IMAGENET_TRAIN_PATH = "/iris/u/armaana/datasets/ILSVRC2012_img_train"
+THIS_DIR = Path(__file__).parent
 
 # Number of images to sample from each dataset for FID computation
 # Set to None to use all available images
@@ -142,7 +143,7 @@ def compute_fid(generated_folder, imagenet_folder,
 
     # Create temporary directories for torch-fidelity
     print("\nPreparing datasets for FID computation...")
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(dir=THIS_DIR) as temp_dir:
         gen_dataset_dir = create_temp_dataset(generated_paths,
                                                os.path.join(temp_dir, 'gen'))
         imagenet_dataset_dir = create_temp_dataset(imagenet_paths,
