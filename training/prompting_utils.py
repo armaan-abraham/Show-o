@@ -116,8 +116,7 @@ class UniversalPrompting():
         return torch.cat(sequence_ids, dim=0), torch.cat(attention_masks, dim=0), torch.cat(label_ids, dim=0)
 
 
-    def t2i_gen_prompt(self, text_ids, image_len, image_fill_id=0):
-        device = text_ids[0].device
+    def t2i_gen_prompt(self, text_ids, image_len, device, image_fill_id=0):
         sequence_ids = []
         for i in range(len(text_ids)):
 

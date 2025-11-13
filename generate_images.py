@@ -66,7 +66,7 @@ def main():
     )
 
     # Load checkpoint
-    checkpoint_path = "runs/easy/checkpoint-20000/unwrapped_model/pytorch_model.bin"
+    checkpoint_path = "runs/easy/checkpoint-70000/unwrapped_model/pytorch_model.bin"
     print(f"Loading checkpoint from {checkpoint_path}")
     state_dict = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(state_dict, strict=True)
@@ -114,6 +114,7 @@ def main():
         input_ids = uni_prompting.t2i_gen_prompt(
             text_ids,
             image_len=image_len,
+            device=device,
         )
         print("Input ids shape:", input_ids.shape)
         print("Input ids:", input_ids[:, :10])
