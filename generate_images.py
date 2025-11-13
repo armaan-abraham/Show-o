@@ -15,7 +15,8 @@ from models.easy import EasyTransformer
 from training.prompting_utils import UniversalPrompting
 
 # Configuration
-OUTPUT_DIR = "generated_images"  # Path where generated images will be saved
+BASE_DIR = Path("runs/easy-vanilla")
+OUTPUT_DIR = BASE_DIR / "generated_images"
 NUM_SAMPLES_PER_PROMPT = 4  # Number of images to generate per prompt
 
 # List of text prompts to generate images for
@@ -31,7 +32,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Load config
-    config = OmegaConf.load("runs/easy/config.yaml")
+    config = OmegaConf.load(BASE_DIR / "config.yaml")
 
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -66,7 +67,7 @@ def main():
     )
 
     # Load checkpoint
-    checkpoint_path = "runs/easy/checkpoint-70000/unwrapped_model/pytorch_model.bin"
+    checkpoint_path = BASE_DIR / "checkpoint-70000" / "unwrapped_model" / "pytorch_model.bin"
     print(f"Loading checkpoint from {checkpoint_path}")
     state_dict = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(state_dict, strict=True)
