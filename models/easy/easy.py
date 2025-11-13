@@ -486,14 +486,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             # passing residuals from last input block to first output block
             io_interface_mask = get_io_interface_mask(inference_groups)
             assert io_interface_mask.shape == (batch_size, seq_len, seq_len)
-
-            # Construct mask designating where inferences start in each batch.
-            # This will exclude the initial padding tokens and the inference
-            # group immediately after them.
-            # Get first token after optional left padding.
-            nonpad_first = (input_ids_reordered != pad_id).int().argmax(dim=1)
-            # Get inference groups for each first token.
-            first_inference_groups = inference_groups[torch.arange(batch_size, device=device), nonpad_first]
         
         # Repeatedly generate logits on the entire batch, and fill in tokens
         # corresponding to the current inference group, until we have gone
@@ -511,7 +503,7 @@ class EasyTransformer(ModelMixin, ConfigMixin):
         final_inference_group = inference_groups[
             torch.arange(batch_size, device=device), last_image_pos
         ]
-        while True:
+        while torch.any(current_inference_group <= final_inference_group):
             logits = self._forward(
                 input_ids_reordered, reorder_idx_seq, attn_mask, io_interface_mask, inference_groups,
             )
@@ -535,11 +527,6 @@ class EasyTransformer(ModelMixin, ConfigMixin):
             
             # Move to next inference group
             current_inference_group += 1
-
-            # Termination condition: if all rows have had their final inference
-            # group generated, we are done.
-            if torch.all(current_inference_group > final_inference_group):
-                break
 
 
         return reset_to_ori_order(input_ids_reordered, reorder_idx_batch, reorder_idx_seq) 
