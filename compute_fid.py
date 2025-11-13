@@ -158,7 +158,7 @@ def compute_fid(generated_folder, imagenet_folder,
             fid=True,
             kid=True,
             verbose=True,
-            batch_size=64
+            batch_size=1
         )
 
     return metrics
