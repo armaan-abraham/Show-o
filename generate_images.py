@@ -15,7 +15,7 @@ from models.easy import EasyTransformer
 from training.prompting_utils import UniversalPrompting
 
 # Configuration
-BASE_DIR = Path("runs/easy-vanilla")
+BASE_DIR = Path("runs/easy-geo")
 OUTPUT_DIR = BASE_DIR / "generated_images"
 NUM_SAMPLES_PER_PROMPT = 4  # Number of images to generate per prompt
 
